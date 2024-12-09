@@ -811,6 +811,9 @@ class TreePiece : public CBase_TreePiece {
    int memWithCache, memPostCache;  // store memory usage.
    int nNodeCacheEntries, nPartCacheEntries;  // store memory usage.
 
+   void startTimestepMemoryTracking();
+   void endTimestepMemoryTracking();
+
 #ifdef PUSH_GRAVITY
    bool doMerge;
    bool createdSpanningTree;
@@ -907,11 +910,12 @@ class TreePiece : public CBase_TreePiece {
         int NumberOfGPUParticles;
         BucketActiveInfo *bucketActiveInfo;
 
-	// For accessing GPU memory
-	CudaMultipoleMoments *d_localMoments;
+        CudaDevPtr cudaDevPtr;
+        // For accessing GPU memory
+        CudaMultipoleMoments *d_localMoments;  // Only one declaration
         CudaMultipoleMoments *d_remoteMoments;
         CompactPartData *d_localParts;
-	CompactPartData *d_remoteParts;
+        CompactPartData *d_remoteParts;
         VariablePartData *d_localVars;
         size_t sMoments;
         size_t sCompactParts;
@@ -1068,8 +1072,16 @@ class TreePiece : public CBase_TreePiece {
 private:        
 	// liveViz 
 	liveVizRequestMsg * savedLiveVizMsg;
+  bool bMemoryManagerInitialized;  // Track if memory manager is initialized
 
-        LBStrategy foundLB;
+    // Memory tracking variables
+    int timestepMemoryUsage;  // Memory usage for current timestep
+    int peakMemoryUsage;      // Peak memory usage across all timesteps
+    int totalAllocations;     // Total number of allocations
+    int reuseCount;           // Number of times buffers were reused
+    double avgAllocationTime; // Average time per allocation
+
+    LBStrategy foundLB;
         // jetley - saved first internal node
         Vector3D<float> savedCentroid;
         /// The phase for which we have just collected load balancing data.
@@ -1107,6 +1119,8 @@ private:
 	/// myNumParticles when particles are created.
 	int myTreeParticles;
  public:
+
+ 
 	/// Total Particles in the simulation
 	int64_t nTotalParticles;
 	/// Total Gas Particles
@@ -1432,7 +1446,7 @@ public:
  TreePiece() : pieces(thisArrayID), root(0),
             iPrevRungLB (-1), sTopDown(0), sGravity(0),
             sPrefetch(0), sLocal(0), sRemote(0), sPref(0), sSmooth(0), 
-            nPrevActiveParts(0) {
+            nPrevActiveParts(0), bMemoryManagerInitialized(false) {
 	  dm = NULL;
 	  foundLB = Null; 
 	  iterationNo=0;
@@ -1472,6 +1486,12 @@ public:
           bUseCpu = 1;
 #ifdef CUDA
           numActiveBuckets = -1;
+          // Initialize CUDA device pointer struct
+          cudaDevPtr.d_list = nullptr;
+          cudaDevPtr.d_bucketMarkers = nullptr;
+          cudaDevPtr.d_bucketStarts = nullptr;
+          cudaDevPtr.d_bucketSizes = nullptr;
+          cudaDevPtr.memManager = nullptr;
 #ifdef HAPI_TRACE
           localNodeInteractions = 0;
           localPartInteractions = 0;
@@ -1514,49 +1534,56 @@ public:
 	}
 
     TreePiece(CkMigrateMessage* m): pieces(thisArrayID) {
+        usesAtSync = true;
+        //localCache = NULL;
+        dm = NULL;
+        bucketReqs = NULL;
+        numChunks=-1;
+        nCacheAccesses = 0;
+        memWithCache = 0;
+        memPostCache = 0;
+        nNodeCacheEntries = 0;
+        nPartCacheEntries = 0;
+        completedActiveWalks = 0;
+        prefetchRoots = NULL;
+        //remaining Chunk = NULL;
+        ewt = NULL;
+        root = NULL;
+        pTreeNodes = NULL;
 
-	  usesAtSync = true;
-	  //localCache = NULL;
-	  dm = NULL;
-	  bucketReqs = NULL;
-	  numChunks=-1;
-	  nCacheAccesses = 0;
-	  memWithCache = 0;
-	  memPostCache = 0;
-	  nNodeCacheEntries = 0;
-	  nPartCacheEntries = 0;
-	  completedActiveWalks = 0;
-	  prefetchRoots = NULL;
-	  //remaining Chunk = NULL;
-          ewt = NULL;
-	  root = NULL;
-	  pTreeNodes = NULL;
-
-      sTopDown = 0;
-	  sGravity = NULL;
-	  sPrefetch = NULL;
-	  sSmooth = NULL;
+        sTopDown = 0;
+        sGravity = NULL;
+        sPrefetch = NULL;
+        sSmooth = NULL;
 #if INTERLIST_VER > 0
-	  sInterListWalk = NULL;
+        sInterListWalk = NULL;
 #endif
 
-          incomingParticlesMsg.clear();
-          incomingParticlesArrived = 0;
-          incomingParticlesSelf = false;
+#ifdef CUDA
+        // Initialize CUDA device pointer struct
+        cudaDevPtr.d_list = nullptr;
+        cudaDevPtr.d_bucketMarkers = nullptr;
+        cudaDevPtr.d_bucketStarts = nullptr;
+        cudaDevPtr.d_bucketSizes = nullptr;
+        cudaDevPtr.memManager = nullptr;
+#endif
 
-	  cnt=0;
-	  nodeInterRemote = NULL;
-          particleInterRemote = NULL;
+        incomingParticlesMsg.clear();
+        incomingParticlesArrived = 0;
+        incomingParticlesSelf = false;
 
-	  orbBoundaries.clear();
-	  boxes = NULL;
-	  splitDims = NULL;
-          bBucketsInited = false;
-	  myTreeParticles = -1;
+        cnt=0;
+        nodeInterRemote = NULL;
+        particleInterRemote = NULL;
 
+        orbBoundaries.clear();
+        boxes = NULL;
+        splitDims = NULL;
+        bBucketsInited = false;
+        myTreeParticles = -1;
 
-          localTreeBuildComplete = false;
-	}
+        localTreeBuildComplete = false;
+    }
 
         private:
         void freeWalkObjects();
@@ -1587,6 +1614,15 @@ public:
 #ifndef COOLING_NONE
 	  if(bGasCooling)
 	      CoolDerivsFinalize(CoolData);
+#endif
+
+#ifdef CUDA
+        // Clean up CUDA memory manager if it exists
+        if (cudaDevPtr.memManager) {
+            cudaDevPtr.memManager->printLifetimeStats();  // Print final stats
+            delete cudaDevPtr.memManager;  // Now we can safely delete it
+            cudaDevPtr.memManager = nullptr;
+        }
 #endif
           if (verbosity>1) ckout <<"Finished deallocation of treepiece "<<thisIndex<<endl;
 	}

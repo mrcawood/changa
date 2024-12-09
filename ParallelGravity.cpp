@@ -2134,8 +2134,10 @@ void Main::kick(bool bClosing, int iActiveRung, int nextMaxRung,
                 const CkCallback &cbGravity, double gravStartTime)
 {
     if(verbosity) {
-        if(bClosing)
+        if(bClosing) {
+            CmiPrintf("[DEBUG] Kick Close: bClosing=true on PE %d\n", CkMyPe());
             CkPrintf("Kick Close:\n");
+        }
         else
             CkPrintf("Kick Open:\n");
     }

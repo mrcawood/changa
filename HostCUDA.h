@@ -1,9 +1,12 @@
-#ifndef _HOST_CUDA_H_
-#define _HOST_CUDA_H_
-
+#ifndef _HOSTCUDA_H_
+#define _HOSTCUDA_H_
 
 #include <cuda_runtime.h>
+#include "cosmo.h"
 #include "cuda_typedef.h"
+#include "moments.h"
+#include "CudaMemoryManager.h"
+#include "cuda_structs.h"
 
 #define THREADS_PER_BLOCK 128
 
@@ -32,6 +35,9 @@ typedef struct _CudaRequest{
         /// CUDA stream to handle memory operations and kernel launches for this request
         /// Allocation and deallocation of the stream is handled by the DataManager
 	cudaStream_t stream;
+
+        /// Pointer to TreePiece's CudaDevPtr for memory management
+        CudaDevPtr* cudaDevPtr;
 
 	/// for accessing device memory
 	CudaMultipoleMoments *d_localMoments;
@@ -88,14 +94,6 @@ typedef struct _CudaRequest{
 #endif //GPU_LOCAL_TREE_WALK
 }CudaRequest;
 
-/// Device memory pointers used by most functions in HostCUDA
-typedef struct _CudaDevPtr{
-    void *d_list;
-    int *d_bucketMarkers;
-    int *d_bucketStarts;
-    int *d_bucketSizes;
-}CudaDevPtr;
-
 void allocatePinnedHostMemory(void **, size_t);
 void freePinnedHostMemory(void *);
 
@@ -124,5 +122,9 @@ void TreePiecePartListDataTransferRemote(CudaRequest *data);
 void TreePiecePartListDataTransferRemoteResume(CudaRequest *data);
 
 void DummyKernel(void *cb);
+
+void TreePieceDataTransferBasic(CudaRequest *data, CudaDevPtr *ptr);
+void TreePieceDataTransferBasicCleanup(CudaDevPtr *ptr);
+void TreePieceDataTransferBasicDestroy(CudaDevPtr *ptr);
 
 #endif

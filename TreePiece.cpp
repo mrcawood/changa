@@ -1437,6 +1437,28 @@ void TreePiece::calcEnergy(const CkCallback& cb) {
 }
 
 #include "physconst.h"
+void TreePiece::startTimestepMemoryTracking() {
+    timestepMemoryUsage = CmiMemoryUsage()/(1024*1024);
+    totalAllocations = 0;
+    reuseCount = 0;
+    avgAllocationTime = 0.0;
+}
+
+void TreePiece::endTimestepMemoryTracking() {
+    int currentMemory = CmiMemoryUsage()/(1024*1024);
+    if (currentMemory > peakMemoryUsage) {
+        peakMemoryUsage = currentMemory;
+    }
+    CkPrintf("\n=== TreePiece %d Memory Statistics ===\n", thisIndex);
+    CkPrintf("Timestep Memory Usage: %d MB\n", currentMemory - timestepMemoryUsage);
+    CkPrintf("Peak Memory Usage: %d MB\n", peakMemoryUsage);
+    CkPrintf("Total Allocations: %d\n", totalAllocations);
+    CkPrintf("Buffer Reuse Count: %d (%.1f%%)\n", reuseCount, 
+             totalAllocations > 0 ? (reuseCount * 100.0 / totalAllocations) : 0.0);
+    CkPrintf("Average Allocation Time: %.3f ms\n", avgAllocationTime);
+    CkPrintf("Cache Entries - Nodes: %d, Parts: %d\n", nNodeCacheEntries, nPartCacheEntries);
+    CkPrintf("=====================================\n\n");
+}
 
 void TreePiece::kick(int iKickRung, double dDelta[MAXRUNG+1],
 		     int bClosing, // Are we at the end of a timestep
@@ -1671,6 +1693,16 @@ void TreePiece::kick(int iKickRung, double dDelta[MAXRUNG+1],
 	  glassDamping(p->velocity, dDelta[p->rung], dGlassDamper);
 	  }
       }
+
+if (bClosing && iKickRung == 0) {
+    if (cudaDevPtr.memManager) {
+        //CmiPrintf("[DEBUG] About to print final memory stats on PE %d\n", CkMyPe());
+        cudaDevPtr.memManager->printLifetimeStats();
+        //CmiPrintf("[DEBUG] Finished printing final memory stats on PE %d\n", CkMyPe());
+        delete cudaDevPtr.memManager;
+        cudaDevPtr.memManager = nullptr;
+    }
+}
   contribute(cb);
 }
 
@@ -5786,6 +5818,18 @@ void TreePiece::pup(PUP::er& p) {
   p | savedCentroid;
   p | iPrevRungLB;
 
+  #ifdef CUDA
+    // Note: We don't pup the memory manager or device pointers
+    // They need to be reinitialized on the new processor
+    if (p.isUnpacking()) {
+      cudaDevPtr.d_list = nullptr;
+      cudaDevPtr.d_bucketMarkers = nullptr;
+      cudaDevPtr.d_bucketStarts = nullptr;
+      cudaDevPtr.d_bucketSizes = nullptr;
+      cudaDevPtr.memManager = nullptr;
+  }
+  #endif
+
   p | callback;
   p | nTotalParticles;
   p | myNumParticles;
@@ -6426,6 +6470,9 @@ void TreePiece::finishWalk()
   if(verbosity > 1)
       CkPrintf("[%d] current load: %g current particles: %d\n", thisIndex,
 	       getObjTime(), myNumParticles);
+  if (cudaDevPtr.memManager) {
+      cudaDevPtr.memManager->printLifetimeStats();
+  }
   completedActiveWalks = 0;
   freeWalkObjects();
 #ifdef CACHE_MEM_STATS

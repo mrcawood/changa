@@ -1102,6 +1102,7 @@ CudaRequest *GenericList<T>::serialize(TreePiece *tp){
     request->affectedBuckets = affectedBuckets;
     request->tp = (void *)tp;
     request->fperiod = tp->fPeriod.x;
+    request->cudaDevPtr = &tp->cudaDevPtr;  // Add this line to set cudaDevPtr
 
 #ifdef HAPI_TRACE
     traceUserBracketEvent(CUDA_SER_LIST, starttime, CmiWallTimer());
@@ -1209,6 +1210,7 @@ CudaRequest *GenericList<ILPart>::serialize(TreePiece *tp){
     request->affectedBuckets = affectedBuckets;
     request->tp = (void *)tp;
     request->fperiod = tp->fPeriod.x;
+    request->cudaDevPtr = &tp->cudaDevPtr;  // Add this line to set cudaDevPtr
 
 #ifdef HAPI_TRACE
     traceUserBracketEvent(CUDA_SER_LIST, starttime, CmiWallTimer());
@@ -1501,6 +1503,7 @@ void ListCompute::sendLocalTreeWalkTriggerToGpu(State *state, TreePiece *tp,
   request->sCompactParts = tp->sCompactParts;
   request->sVarParts = tp->sVarParts;
   request->stream = tp->stream;
+  request->cudaDevPtr = &tp->cudaDevPtr;  // Add this line to set cudaDevPtr
 
   request->numBucketsPlusOne = numFilledBuckets+1;
   request->affectedBuckets = affectedBuckets;
@@ -2084,6 +2087,7 @@ void ListCompute::sendNodeInteractionsToGpu(DoubleWalkState *state,
   data->d_localVars = tp->d_localVars;
   data->d_remoteMoments = tp->d_remoteMoments;
   data->stream = tp->stream;
+  data->cudaDevPtr = &tp->cudaDevPtr;  // Add this line to set cudaDevPtr
 
 #ifdef CUDA_PRINT_TRANSFERRED_INTERACTIONS
   CkPrintf("*************\n");
@@ -2179,6 +2183,7 @@ void ListCompute::sendPartInteractionsToGpu(DoubleWalkState *state,
   data->d_localVars = tp->d_localVars;
   data->d_remoteParts = tp->d_remoteParts;
   data->stream = tp->stream;
+  data->cudaDevPtr = &tp->cudaDevPtr;  // Add this line to set cudaDevPtr
 
 #ifdef CUDA_PRINT_TRANSFERRED_INTERACTIONS
   CkPrintf("*************\n");

@@ -11,6 +11,11 @@ VERSION
 VERSION.new
 cha_commitid.c
 
+.vscode
+1node*
+2node*
+charmrun*
+
 # autoconf caches
 autom4te.cache/
 
