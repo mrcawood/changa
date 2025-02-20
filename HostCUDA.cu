@@ -23,6 +23,7 @@
 #include "cuda_typedef.h"
 #include "cuda/intrinsics/voting.hu"
 #include "cuda/intrinsics/shfl.hu"
+#include "GPUMemoryPool.h"
 
 #ifdef GPU_LOCAL_TREE_WALK
 #include "codes.h"
@@ -584,10 +585,17 @@ void TreePieceDataTransferBasic(CudaRequest *data, CudaDevPtr *ptr){
   size_t markerSize = (numBucketsPlusOne) * sizeof(int);
   size_t startSize = (numBuckets) * sizeof(int);
 
-  cudaChk(cudaMalloc(&ptr->d_list, listSize));
-  cudaChk(cudaMalloc(&ptr->d_bucketMarkers, markerSize));
-  cudaChk(cudaMalloc(&ptr->d_bucketStarts, startSize));
-  cudaChk(cudaMalloc(&ptr->d_bucketSizes, startSize));
+  //cudaChk(cudaMalloc(&ptr->d_list, listSize));
+  //cudaChk(cudaMalloc(&ptr->d_bucketMarkers, markerSize));
+  //cudaChk(cudaMalloc(&ptr->d_bucketStarts, startSize));
+  //cudaChk(cudaMalloc(&ptr->d_bucketSizes, startSize));
+
+  gpuPoolMalloc(&ptr->d_list, listSize);
+  gpuPoolMalloc(reinterpret_cast<void**>(&ptr->d_bucketMarkers), markerSize);
+  gpuPoolMalloc(reinterpret_cast<void**>(&ptr->d_bucketStarts), startSize);
+  gpuPoolMalloc(reinterpret_cast<void**>(&ptr->d_bucketSizes), startSize);
+
+
   cudaChk(cudaMemcpyAsync(ptr->d_list, data->list, listSize, cudaMemcpyHostToDevice, stream));
   cudaChk(cudaMemcpyAsync(ptr->d_bucketMarkers, data->bucketMarkers, markerSize, cudaMemcpyHostToDevice, stream));
   cudaChk(cudaMemcpyAsync(ptr->d_bucketStarts, data->bucketStarts, startSize, cudaMemcpyHostToDevice, stream));
