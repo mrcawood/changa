@@ -614,10 +614,14 @@ void TreePieceDataTransferBasic(CudaRequest *data, CudaDevPtr *ptr){
 /// @brief Free device memory used for interaction list and bucket data
 /// @param ptr CudaDevPtr object that stores handles to device memory
 void TreePieceDataTransferBasicCleanup(CudaDevPtr *ptr){
-  cudaChk(cudaFree(ptr->d_list));
-  cudaChk(cudaFree(ptr->d_bucketMarkers));
-  cudaChk(cudaFree(ptr->d_bucketStarts));
-  cudaChk(cudaFree(ptr->d_bucketSizes));
+  //cudaChk(cudaFree(ptr->d_list));
+  //cudaChk(cudaFree(ptr->d_bucketMarkers));
+  //cudaChk(cudaFree(ptr->d_bucketStarts));
+  //cudaChk(cudaFree(ptr->d_bucketSizes));
+  gpuPoolFree(ptr->d_list);
+  gpuPoolFree(ptr->d_bucketMarkers);
+  gpuPoolFree(ptr->d_bucketStarts);
+  gpuPoolFree(ptr->d_bucketSizes);
 }
 
 /** @brief Transfer forces from the GPU back to the host. Also schedules

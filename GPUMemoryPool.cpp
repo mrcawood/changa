@@ -6,7 +6,7 @@ GPUMemoryPool::GPUMemoryPool() {
 }
 
 GPUMemoryPool::~GPUMemoryPool() {
-    // Optionally, release any remaining memory here.
+    // Optionally, you might iterate and free all stored memory blocks here.
 }
 
 cudaError_t GPUMemoryPool::malloc(void** ptr, size_t size, const char* file, int line) {
@@ -19,6 +19,9 @@ cudaError_t GPUMemoryPool::malloc(void** ptr, size_t size, const char* file, int
         printf("[GPUMemoryPool] Reusing free block at %p of size %zu (requested %zu) [%s:%d]\n",
                *ptr, it->first, size, file, line);
         freeBlocks.erase(it);
+        // Retrieve the recorded allocation size.
+        size_t actualSize = allocatedSizes[*ptr];
+        allocatedSizes.erase(*ptr);
         CmiUnlock(poolLock);
         return cudaSuccess;
     }
@@ -28,6 +31,8 @@ cudaError_t GPUMemoryPool::malloc(void** ptr, size_t size, const char* file, int
     if (err == cudaSuccess) {
         printf("[GPUMemoryPool] Allocated new block at %p of size %zu using cudaMalloc [%s:%d]\n",
                *ptr, size, file, line);
+        // Record the allocated size.
+        allocatedSizes[*ptr] = size;
     } else {
         printf("[GPUMemoryPool] cudaMalloc failed for size %zu at %s:%d\n", size, file, line);
     }
@@ -38,13 +43,21 @@ cudaError_t GPUMemoryPool::malloc(void** ptr, size_t size, const char* file, int
 cudaError_t GPUMemoryPool::free(void* ptr, const char* file, int line) {
     CmiLock(poolLock);
     
-    // For this simple implementation, we simply add the pointer back to the pool with a dummy size.
-    size_t dummySize = 0; // If desired, you can maintain an extra map pointer->size.
-    printf("[GPUMemoryPool] Freeing block at %p for reuse [%s:%d]\n", ptr, file, line);
-    freeBlocks.insert(std::make_pair(dummySize, ptr));
+    // Retrieve the actual block size from our tracking.
+    size_t actualSize = 0;
+    std::map<void*, size_t>::iterator it = allocatedSizes.find(ptr);
+    if(it != allocatedSizes.end()) {
+        actualSize = it->second;
+    } else {
+        // If not found, default to a conservative size.
+        actualSize = 0;
+    }
+    
+    printf("[GPUMemoryPool] Freeing block at %p for reuse (size %zu) [%s:%d]\n",
+           ptr, actualSize, file, line);
+    // Insert the block back into the pool with its actual size.
+    freeBlocks.insert(std::make_pair(actualSize, ptr));
     
     CmiUnlock(poolLock);
-    // Optionally, one could call cudaFree() if you want to release memory back to the OS.
-    // For now, we keep the block alive in the pool.
     return cudaSuccess;
 } 

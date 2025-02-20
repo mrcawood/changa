@@ -27,8 +27,10 @@ private:
     GPUMemoryPool& operator=(const GPUMemoryPool&) { return *this; }
     
     CmiNodeLock poolLock; // C++03 compliant lock from Charm++.
-    // For simplicity, we track free blocks by size. (This is a naive implementation.)
+    // Map of free blocks keyed by their actual size.
     std::multimap<size_t, void*> freeBlocks;
+    // Map to track allocated block sizes.
+    std::map<void*, size_t> allocatedSizes;
 };
 
 // Templated inline wrapper to hide cast ugliness.
