@@ -19,9 +19,6 @@ cudaError_t GPUMemoryPool::malloc(void** ptr, size_t size, const char* file, int
         printf("[GPUMemoryPool] Reusing free block at %p of size %zu (requested %zu) [%s:%d]\n",
                *ptr, it->first, size, file, line);
         freeBlocks.erase(it);
-        // Retrieve the recorded allocation size.
-        size_t actualSize = allocatedSizes[*ptr];
-        allocatedSizes.erase(*ptr);
         CmiUnlock(poolLock);
         return cudaSuccess;
     }
