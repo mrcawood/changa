@@ -92,6 +92,13 @@ void load_tipsy_dark(Tipsy::TipsyReader &r, GravityParticle &p)
 #endif
 	p.fDensity = 0.0;
 	p.iType = TYPE_DARK;
+#ifdef COLLISION
+    p.dtKep = 0;
+    p.vPred() = dp.vel;
+    p.dtCol = DBL_MAX;
+    p.iOrderCol = -1;
+    p.w = Vector3D<double>(0.);
+#endif
 }
 
 template <typename TPos, typename TVel>
@@ -107,6 +114,11 @@ void load_tipsy_star(Tipsy::TipsyReader &r, GravityParticle &p)
 #ifdef CHANGESOFT
     p.fSoft0 = sp.eps;
 #endif
+#ifdef COLLISION
+    p.dtCol = DBL_MAX;
+    p.iOrderCol = -1;
+    p.w = Vector3D<double>(0.);
+#endif
     p.fDensity = 0.0;
     p.iType = TYPE_STAR;
     p.fStarMetals() = sp.metals;
@@ -117,6 +129,9 @@ void load_tipsy_star(Tipsy::TipsyReader &r, GravityParticle &p)
     p.fTimeForm() = sp.tform;
     p.iGasOrder() = -1;
 #ifdef COOLING_MOLECULARH 
+#ifdef SHIELDSF
+    p.fShieldForm() = 0;
+#endif
     p.dStarLymanWerner() = 0.0;
 #endif
 }
@@ -713,6 +728,28 @@ static void load_NC_dark(std::string filename, int64_t startParticle,
     
     load_NC_base(filename, startParticle, myNumDark, myParts);
 
+#ifdef COLLISION
+    if(verbosity && startParticle == 0)
+        CkPrintf("loading spins\n");
+
+    FieldHeader fh;
+    void *data = readFieldData(filename + "/spin", fh, 3, myNumDark,
+                               startParticle);
+    for(int i = 0; i < myNumDark; ++i) {
+	    switch(fh.code) {
+	    case float32:
+                myParts[i].w = static_cast<Vector3D<float> *>(data)[i];
+	        break;
+	    case float64:
+                myParts[i].w = static_cast<Vector3D<double> *>(data)[i];
+	        break;
+	    default:
+	        throw XDRException("I don't recognize the type of this field!");
+	        }
+        }
+    deleteField(fh, data);
+#endif
+
     for(int i = 0; i < myNumDark; ++i) {
         myParts[i].fDensity = 0.0;
         myParts[i].iType = TYPE_DARK;
@@ -796,6 +833,9 @@ static void load_NC_star(std::string filename, int64_t startParticle,
         myParts[i].fMassForm() = myParts[i].mass;
 #ifdef COOLING_MOLECULARH 
         myParts[i].dStarLymanWerner() = 0.0;
+#ifdef SHIELDSF
+        myParts[i].fShieldForm() = 0;
+#endif
 #endif
         }
 }
