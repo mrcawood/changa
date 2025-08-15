@@ -2687,7 +2687,7 @@ void TreePiece::recvdBoundaries(CkReductionMsg* m) {
 void TreePiece::quiescence() {
 
   CkPrintf("[%d] quiescence detected, pending %d total %d\n",
-                          thisIndex, sLocalGravityState->myNumParticlesPending,
+                          thisIndex, sLocalGravityState->myNumBucketsPendingWalk,
                           numBuckets);
 
   for (unsigned int i=0; i<numBuckets; ++i) {
@@ -3728,48 +3728,62 @@ void TreePiece::startNextBucket() {
 void TreePiece::finishWalkCb() {
   finishWalkCbCount += 1;
   // dont check in with DM until local, remote and RR finish
-  if (finishWalkCbCount == 6) {
-    dm->transferParticleVarsBack();
+  if (finishWalkCbCount == numPEListProxies) {
     finishWalkCbCount = 0;
-    peNodeLocalListProxy.ckLocalBranch()->reset();
-    peNodeRemoteListProxy.ckLocalBranch()->reset();
-    peNodeRemoteResumeListProxy.ckLocalBranch()->reset();
-    pePartLocalListProxy.ckLocalBranch()->reset();
-    pePartRemoteListProxy.ckLocalBranch()->reset();
-    pePartRemoteResumeListProxy.ckLocalBranch()->reset();
+    int numTPs = peNodeLocalListProxy.ckLocalBranch()->getNumTPs();
+    //CkPrintf("%d set gpu done\n", thisIndex);
+    for (int i = 0; i < numPEListProxies; i++) {
+      PEListProxies[i]->ckLocalBranch()->setGPUDone(1);
+      PEListProxies[i]->ckLocalBranch()->reset();
+    }
+    //CkPrintf("%d setGPUDone\n", thisIndex);
+    //CkPrintf("%d remote walk finished, myNumBucketsPendingEwald=%d\n", thisIndex, sLocalGravityState->myNumBucketsPendingEwald);
+
+    // If we arent waiting for Ewald, signal to the DataManager that we are
+    // ready to transfer back data from the GPU
+    if (sLocalGravityState->myNumBucketsPendingEwald <= 0) {
+      //CkPrintf("%d ewald already complete, ready to transfer particles back\n", thisIndex);
+      dm->transferParticleVarsBack(numTPs);
+    }
   }
 }
 #endif
 
-void TreePiece::finishBucket(int iBucket) {
+void TreePiece::finishBucket(int iBucket, int bFromEwald) {
   BucketGravityRequest *req = &bucketReqs[iBucket];
   int remaining;
 
-  remaining = sRemoteGravityState->counterArrays[0][iBucket]
+  if (bFromEwald) sLocalGravityState->myNumBucketsPendingEwald--;
+
+  remaining = sRemoteGravityState->counterArrays[0][iBucket];
               + sLocalGravityState->counterArrays[0][iBucket];
+
+  // If the GPU tree walk is running, only count remote walk particles
+#ifdef GPU_LOCAL_TREE_WALK
+  if (!bUseCpu) remaining = sRemoteGravityState->counterArrays[0][iBucket];
+#endif
 
   CkAssert(remaining >= 0);
 #ifdef COSMO_PRINT
   CkPrintf("[%d] Is finished %d? finished=%d, %d still missing!\n",thisIndex,iBucket,req->finished, remaining);
 #endif
 
-  // XXX finished means Ewald is done.
-  if(req->finished && remaining == 0) {
-    sLocalGravityState->myNumParticlesPending -= 1;
+   //CkPrintf("%d finishBucket, remaining=%d pendingWalk=%d pendingEwald=%d\n", thisIndex, remaining, sLocalGravityState->myNumBucketsPendingWalk, sLocalGravityState->myNumBucketsPendingEwald);
+  // bFromEwald prevents myNumBucketsPendingWalk from decrementing when the Ewald routines call finishBucket
+  if(!bFromEwald && remaining == 0) {
+    sLocalGravityState->myNumBucketsPendingWalk--;
 
 #ifdef COSMO_PRINT_BK
-    CkPrintf("[%d] Finished bucket %d, %d particles remaining\n",thisIndex,iBucket, sLocalGravityState->myNumParticlesPending);
+    CkPrintf("[%d] Finished bucket %d, %d buckets remaining\n",thisIndex,iBucket, sLocalGravityState->myNumBucketsPendingWalk);
 #endif
 
-    if(sLocalGravityState->myNumParticlesPending == 0) {
+    if(sLocalGravityState->myNumBucketsPendingWalk == 0) {
 #ifdef CUDA
       if (!bUseCpu) {
-        peNodeLocalListProxy.ckLocalBranch()->finishWalk(this);
-        peNodeRemoteListProxy.ckLocalBranch()->finishWalk(this);
-        peNodeRemoteResumeListProxy.ckLocalBranch()->finishWalk(this);
-        pePartLocalListProxy.ckLocalBranch()->finishWalk(this);
-        pePartRemoteListProxy.ckLocalBranch()->finishWalk(this);
-        pePartRemoteResumeListProxy.ckLocalBranch()->finishWalk(this);
+        //CkPrintf("%d launching gpu remote walk calculation\n", thisIndex);
+        for (int i = 0; i < numPEListProxies; i++) {
+          PEListProxies[i]->ckLocalBranch()->finishWalk(this);
+        }
       }
 #endif
 
@@ -3780,10 +3794,23 @@ void TreePiece::finishBucket(int iBucket) {
         CkPrintf("[%d] TreePiece %d finished with bucket %d\n",CkMyPe(),thisIndex,iBucket);
 #endif
       }
-
-      if (bUseCpu) continueWrapUp();
     }
   }
+  //CkPrintf("%d %d %d %d\n", thisIndex, bUseCpu, sLocalGravityState->myNumBucketsPendingWalk, sLocalGravityState->myNumBucketsPendingEwald);
+  if (bUseCpu) {
+    if (sLocalGravityState->myNumBucketsPendingWalk == 0 && sLocalGravityState->myNumBucketsPendingEwald <= 0) continueWrapUp();
+  }
+#ifdef CUDA
+  else if (sLocalGravityState->myNumBucketsPendingEwald == 0) {
+    int bAllGPUDone = 1;
+    for (int i = 0; i < numPEListProxies; i++) {
+      if (!PEListProxies[i]->ckLocalBranch()->isGPUDone()) bAllGPUDone = 0;
+    }
+    //CkPrintf("%d %d %d\n", thisIndex, bAllGPUDone, sLocalGravityState->myNumBucketsPendingEwald);
+    // TODO I think we need to test if the PE is empty here, not the TP
+    if (bAllGPUDone || myNumActiveParticles == 0) dm->transferParticleVarsBack(1);
+    }
+#endif
 }
 
 #ifdef CUDA
@@ -3893,15 +3920,20 @@ void TreePiece::doAllBuckets(){
 
 /// @brief Call finishBucket for all buckets on this node
 ///        Used by local tree walk and Ewald GPU operations
-/// @param fromEwald Flags whether this function was called after an Ewald calculation
-void TreePiece::cudaFinishAllBuckets(int fromEwald){
+/// @param bFromEwald Flags whether this function was called after an Ewald calculation
+void TreePiece::cudaFinishAllBuckets(int bFromEwald){
   ListCompute *listcompute = (ListCompute *) sGravity;
   DoubleWalkState *state = (DoubleWalkState *)sLocalGravityState;
 
+  //if (bFromEwald) CkPrintf("%d cudaFinishAllBuckets bFromEwald\n", thisIndex);
+  //else CkPrintf("%d cudaFinishAllBuckets from walk\n", thisIndex);
+
   for (int i = 0; i < numBuckets; ++i) {
-    if (fromEwald) bucketReqs[i].finished = 1;
+    if (bFromEwald) {
+      bucketReqs[i].finished = 1;
+    }
     else state->counterArrays[0][i]--;
-    finishBucket(i);
+    finishBucket(i, bFromEwald);
   }
 }
 
@@ -3920,7 +3952,7 @@ void TreePiece::cudaFinishAffectedBuckets(int *affectedBuckets, int numBuckets, 
   for (int i = 0; i < numBuckets; ++i) {
     bucket = affectedBuckets[i];
     state->counterArrays[0][bucket]--;
-    finishBucket(bucket);
+    finishBucket(bucket, 0);
   }
 }
 
@@ -4016,7 +4048,7 @@ void TreePiece::nextBucket(dummyMsg *msg){
       i += numActualBuckets;
 #else
       sLocalGravityState->counterArrays[0][currentBucket]--;
-      finishBucket(currentBucket);
+      finishBucket(currentBucket, 0);
 
       currentBucket++;
       if(currentBucket < numBuckets) // state could be deleted in this case.
@@ -4044,7 +4076,7 @@ void TreePiece::nextBucket(dummyMsg *msg){
       while(currentBucket < numBuckets && bucketList[currentBucket]->rungs < activeRung){
 
 	sLocalGravityState->counterArrays[0][currentBucket]--;
-        finishBucket(currentBucket);
+        finishBucket(currentBucket, 0);
         currentBucket++;
 	if(currentBucket < numBuckets) // state could be deleted in
 				       // this case.
@@ -4149,7 +4181,7 @@ void TreePiece::ewaldCPU(EwaldMsg *msg) {
     }
 
     bucketReqs[ewaldCurrentBucket].finished = 1;
-    finishBucket(ewaldCurrentBucket);
+    finishBucket(ewaldCurrentBucket, 1);
 
     ewaldCurrentBucket++;
     i++;
@@ -4457,7 +4489,7 @@ void TreePiece::calculateGravityRemote(ComputeChunkMsg *msg) {
 #if INTERLIST_VER > 0
 #else
     sRemoteGravityState->counterArrays[0][sRemoteGravityState->currentBucket]--;
-    finishBucket(sRemoteGravityState->currentBucket);
+    finishBucket(sRemoteGravityState->currentBucket, 0);
     sRemoteGravityState->counterArrays[1][msg->chunkNum] --;
     sRemoteGravityState->currentBucket++;
     i++;
@@ -4575,7 +4607,7 @@ int TreePiece::doBookKeepingForTargetActive(int curbucket, int end,
 #if COSMO_PRINT_BK > 1
       CkPrintf("[%d] bucket %d numAddReq: %d,%d\n", thisIndex, j, sRemoteGravityState->counterArrays[0][j], sLocalGravityState->counterArrays[0][j]);
 #endif
-      finishBucket(j);
+      finishBucket(j, 0);
     }
 
     if(bucketList[j]->rungs >= activeRung){
@@ -4606,7 +4638,7 @@ int TreePiece::doBookKeepingForTargetInactive(int chunkNum, bool updatestate,
         bucketList[gravityState->currentBucket]->rungs < activeRung){
     if (updatestate) {
       gravityState->counterArrays[0][gravityState->currentBucket]--;
-      finishBucket(gravityState->currentBucket);
+      finishBucket(gravityState->currentBucket, 0);
     }
 #if COSMO_PRINT_BK > 1
     CkPrintf("[%d] bucket %d numAddReq: %d,%d\n", thisIndex, sRemoteGravityState->currentBucket, sRemoteGravityState->counterArrays[0][sRemoteGravityState->currentBucket], sLocalGravityState->counterArrays[0][sRemoteGravityState->currentBucket]);
@@ -5186,7 +5218,8 @@ void TreePiece::startGravity(int am, // the active mask for multistepping
 
 #endif // INTERLIST_VER
 
-  sLocalGravityState->myNumParticlesPending = numBuckets; 
+  sLocalGravityState->myNumBucketsPendingWalk = numBuckets;
+  sLocalGravityState->myNumBucketsPendingEwald = bEwald ? numBuckets : -1;
   sRemoteGravityState->numPendingChunks = numChunks;
   // current remote bucket
   sRemoteGravityState->currentBucket = 0;
@@ -6409,7 +6442,7 @@ void TreePiece::updateBucketState(int start, int end, int n, int chunk, State *s
    // either case.) therefore, some work requests must already
    // have been issued before it was invoked, so there will
    // be a finishBucket call afterwards to ensure progress.
-   if (bUseCpu) finishBucket(i);
+   if (bUseCpu) finishBucket(i, 0);
     }
   }
   state->counterArrays[1][chunk] -= n;

@@ -311,7 +311,7 @@ void GravityCompute::recvdParticles(ExternalGravityParticle *part,int num,int ch
   computeTimePart += CmiWallTimer() - startTime;
 #endif
   tp->particleInterRemote[chunk] += computed * num;
-  tp->finishBucket(reqIDlist);
+  tp->finishBucket(reqIDlist, 0);
   CkAssert(state->counterArrays[1][chunk] >= 0);
   if (state->counterArrays[1][chunk] == 0) {
     cacheGravPart[CkMyPe()].finishedChunk(chunk, tp->particleInterRemote[chunk]);
@@ -339,7 +339,7 @@ void PrefetchCompute::recvdParticles(ExternalGravityParticle *egp,int num,int ch
 void GravityCompute::nodeRecvdEvent(TreePiece *owner, int chunk, State *state, int reqIDlist){
 
   state->counterArrays[0][reqIDlist]--;
-  owner->finishBucket(reqIDlist);
+  owner->finishBucket(reqIDlist, 0);
 
   CkAssert(chunk >= 0);
   state->counterArrays[1][chunk] --;

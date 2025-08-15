@@ -2,6 +2,8 @@
 
 #include "PEList.h"
 #include "HostCUDA.h"
+#include "DataManager.h"
+#include "ParallelGravity.h"
 
 /// @brief Each TreePiece on a given PE checks in as its tree walk completes
 ///        Once all TreePieces are done, launch a gravity kernel on the GPU
@@ -49,6 +51,17 @@ void PEList::finishWalk(TreePiece *treePiece) {
     request->bucketSizes = bucketSizes.data();
     request->numInteractions = iList.size();
 
+    finishCb = new CkCallback(CkIndex_TreePiece::finishWalkCb(), treePiece);
+    request->cb = finishCb;
+
+    if (dMProxy.ckLocalBranch()->isLocalDataReady()) launchGPUKernel();
+    else {
+      //CkPrintf("%d delayed waiting for local data\n", CkMyPe());
+      bWaitForLocalData = 1;
+    }
+}
+
+void PEList::launchGPUKernel() {
     void (*transferFunc)(CudaRequest*);
     if (bNode) {
 	transferFunc = bRemote ? PEListNodeListDataTransferRemote : PEListNodeListDataTransferLocal;
@@ -61,9 +74,6 @@ void PEList::finishWalk(TreePiece *treePiece) {
 		transferFunc = PEListPartListDataTransferRemoteResume;
 	}
     }
-
-    finishCb = new CkCallback(CkIndex_TreePiece::finishWalkCb(), treePiece);
-    request->cb = finishCb;
     transferFunc(request);
 }
 
@@ -151,6 +161,7 @@ void PEList::reset() {
     cTreePieces.reset();
     vtpLocal.length() = 0;
     finalBucketMarker = -1;
+    bWaitForLocalData = 0;
     delete finishCb;
     delete request;
 }

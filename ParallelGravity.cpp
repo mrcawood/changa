@@ -93,6 +93,18 @@ CProxy_PEList peNodeRemoteResumeListProxy;
 CProxy_PEList pePartLocalListProxy;
 CProxy_PEList pePartRemoteListProxy;
 CProxy_PEList pePartRemoteResumeListProxy;
+
+
+CProxy_PEList* PEListProxies[] = {
+    &peNodeLocalListProxy,
+    &peNodeRemoteListProxy,
+    &peNodeRemoteResumeListProxy,
+    &pePartLocalListProxy,
+    &pePartRemoteListProxy,
+    &pePartRemoteResumeListProxy
+};
+
+const int numPEListProxies = sizeof(PEListProxies) / sizeof(PEListProxies[0]);
 #endif
 
 /// @brief Use the cache (always on)

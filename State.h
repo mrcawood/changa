@@ -16,9 +16,10 @@ class State {
     // state also have this variable but have no use for it, since only
     // a single copy is required.
     // could have made this the third element in the array below
-    /// @brief Keep track of how many buckets are unfinished.  XXX
-    /// note the misnomer.
     int myNumParticlesPending;
+
+    int myNumBucketsPendingWalk;
+    int myNumBucketsPendingEwald;
 
     // again, redundant variables, since only remote-no-resume
     // walks use this variable to see how many chunks have 

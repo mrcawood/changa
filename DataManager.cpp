@@ -13,6 +13,7 @@
 #include "cuda_typedef.h"
 #include "SFC.h"
 #include "GPUMemoryPool.h"
+#include "PEList.h"
 #endif
 
 #include "Compute.h"
@@ -38,7 +39,7 @@ void DataManager::init() {
   treePiecesDonePrefetch = 0;
   treePiecesDoneLocalComputation = 0;
   treePiecesDoneRemoteChunkComputation = 0;
-  PEsWantParticlesBack = 0;
+  treePiecesWantParticlesBack = 0;
   treePiecesParticlesUpdated = 0;
   localDataDone = false;
   waitForLocalData = false;
@@ -149,7 +150,6 @@ void DataManager::notifyPresence(Tree::GenericTreeNode *root, TreePiece *tp) {
   CmiLock(__nodelock);
   registeredTreePieces.push_back(TreePieceDescriptor(tp, root));
 #ifdef CUDA
-  registeredPEs.insert(tp->getParentPE());
   //registeredTreePieceIndices.push_back(index);
 #if COSMO_PRINT_BK > 1
   CkPrintf("(%d) notifyPresence called by %d, length: %d\n", CkMyPe(), tp->getIndex(), registeredTreePieces.length());
@@ -161,9 +161,6 @@ void DataManager::notifyPresence(Tree::GenericTreeNode *root, TreePiece *tp) {
 /// \brief Clear registeredTreePieces on this node.
 void DataManager::clearRegisteredPieces(const CkCallback& cb) {
     registeredTreePieces.removeAll();
-#ifdef CUDA
-    registeredPEs.clear();
-#endif
     contribute(cb);
 }
 
@@ -500,19 +497,19 @@ void DataManager::startEwaldGPU() {
         return;
     }
 
-    localTransferCallback
+    ewaldCallback 
       = new CkCallback(CkIndex_DataManager::finishEwaldGPU(), CkMyNode(), dMProxy);
 
-    DataManagerEwald(d_localParts, d_localVars, ewt, cachedData, savedNumTotalParticles-1, stream, localTransferCallback);
+    DataManagerEwald(d_localParts, d_localVars, ewt, cachedData, savedNumTotalParticles-1, stream, ewaldCallback);
 }
 
 /// @brief Callback from Ewald kernel launch on GPU
 void DataManager::finishEwaldGPU() {
-  delete localTransferCallback;
+  delete ewaldCallback;
 
-  freePinnedHostMemory(h_idata);
-  freePinnedHostMemory(ewt);
-  freePinnedHostMemory(cachedData);
+  free(h_idata);
+  free(ewt);
+  free(cachedData);
 
   for(int i = 0; i < registeredTreePieces.length(); i++){
       int in = registeredTreePieces[i].treePiece->getIndex();
@@ -527,18 +524,14 @@ void DataManager::finishEwaldGPU() {
 /// Start Ewald calculation if enabled
 // TODO does Ewald still trigger if GPU_LOCAL_TREE_WALK is disabled?
 void DataManager::finishLocalWalk() {
-  delete localTransferCallback;
+  delete localWalkCallback;
+  //CkPrintf("%d finishLocalWalk\n", CkMyPe());
 
   // Wait until the local tree walk kernel completes
   // Otherwise these calls block on the kernel execution
-  freePinnedHostMemory(bufLocalMoments);
-  freePinnedHostMemory(bufLocalParts);
-  freePinnedHostMemory(bufLocalVars);
-  if(bufRemoteMoments != NULL)
-      freePinnedHostMemory(bufRemoteMoments);
-  if(bufRemoteParts != NULL)
-      freePinnedHostMemory(bufRemoteParts);
-
+  free(bufLocalMoments);
+  free(bufLocalParts);
+  free(bufLocalVars);
 
   for(int i = 0; i < registeredTreePieces.length(); i++){
     int in = registeredTreePieces[i].treePiece->getIndex();
@@ -546,9 +539,12 @@ void DataManager::finishLocalWalk() {
   }
 
   if (registeredTreePieces[0].treePiece->bEwald) {
-    allocatePinnedHostMemory((void **)&h_idata, sizeof(EwaldData)*savedNumTotalParticles-1);
-    allocatePinnedHostMemory((void **)&ewt, sizeof(EwtData)*NEWH);
-    allocatePinnedHostMemory((void **)&cachedData, sizeof(EwaldReadOnlyData));
+    //allocatePinnedHostMemory((void **)&h_idata, sizeof(EwaldData)*savedNumTotalParticles-1);
+    //allocatePinnedHostMemory((void **)&ewt, sizeof(EwtData)*NEWH);
+    //allocatePinnedHostMemory((void **)&cachedData, sizeof(EwaldReadOnlyData));
+    h_idata = (EwaldData *) malloc(sizeof(EwaldData)*(savedNumTotalParticles-1));
+    ewt = (EwtData *) malloc(sizeof(EwtData)*NEWH);
+    cachedData = (EwaldReadOnlyData *) malloc(sizeof(EwaldReadOnlyData));
   }
 
   treePiecesEwaldReady = 0;
@@ -577,8 +573,20 @@ void DataManager::startLocalWalk() {
     delete localTransferCallback;
     localDataDone = true;
 
-    if (waitForLocalData)
+    //CkPrintf("%d startLocalWalk\n", CkMyPe());
+    
+    if (waitForLocalData) {
+      //CkPrintf("%d prefetch transfer was delayed, starting now\n", CkMyPe());
       transferPrefetch();
+    }
+
+    // Check if any of the PEList kernels were delayed by the local data transfer
+    for (int i = 0; i < numPEListProxies; i++) {
+      if (PEListProxies[i]->ckLocalBranch()->isWaitingForLocalData()) {
+	//CkPrintf("Proxy is waiting for local data on %d\n", CmiMyNode());
+        PEListProxies[i]->ckLocalBranch()->launchGPUKernel();
+      }
+    }
 
     // Notify TreePieces of device memory pointers for remote gravity
     for(int i = 0; i < registeredTreePieces.length(); i++){
@@ -592,7 +600,7 @@ void DataManager::startLocalWalk() {
 
 
 #ifdef GPU_LOCAL_TREE_WALK
-    localTransferCallback
+    localWalkCallback
       = new CkCallback(CkIndex_DataManager::finishLocalWalk(), CkMyNode(), dMProxy);
 
     CudaRequest *request = new CudaRequest;
@@ -621,7 +629,7 @@ void DataManager::startLocalWalk() {
     request->fperiod = registeredTreePieces[0].treePiece->fPeriod.x;
     request->fperiodY = registeredTreePieces[0].treePiece->fPeriod.y;
     request->fperiodZ = registeredTreePieces[0].treePiece->fPeriod.z;
-    request->cb = localTransferCallback;
+    request->cb = localWalkCallback;
 
     request->list = NULL;
     request->bucketMarkers = NULL;
@@ -699,14 +707,16 @@ void DataManager::transferPrefetch() {
     // XXX copies can be saved here.
     size_t sRemMoments = lastChunkMoments*sizeof(CudaMultipoleMoments);
     if(sRemMoments > 0) {
-	allocatePinnedHostMemory((void **)&bufRemoteMoments, sRemMoments);
+	//allocatePinnedHostMemory((void **)&bufRemoteMoments, sRemMoments);
+	bufRemoteMoments = (CudaMultipoleMoments *) malloc(sRemMoments);
 	memcpy(bufRemoteMoments, buffers->moments->getVec(), sRemMoments);
 	}
     else
 	bufRemoteMoments = NULL;
     size_t sRemParts = lastChunkParticles*sizeof(CompactPartData);
     if(sRemParts > 0) {
-	allocatePinnedHostMemory((void **)&bufRemoteParts, sRemParts);
+	//allocatePinnedHostMemory((void **)&bufRemoteParts, sRemParts);
+	bufRemoteParts = (CompactPartData *) malloc(sRemParts);
 	memcpy(bufRemoteParts, buffers->particles->getVec(), sRemParts);
 	}
     else
@@ -719,8 +729,6 @@ void DataManager::transferPrefetch() {
 				   stream,
 				   remoteChunkTransferCallback);
     waitForLocalData = false;
-    localDataDone = false;
-
 }
 
 typedef std::map<KeyType, CkCacheEntry<KeyType>*> cacheType;
@@ -964,8 +972,18 @@ void DataManager::serializeLocal(GenericTreeNode *nodeRoot){
 #endif
   size_t sLocalParts = numParticles*sizeof(CompactPartData);
   size_t sLocalMoments = localMoments.length()*sizeof(CudaMultipoleMoments);
-  allocatePinnedHostMemory((void **)&bufLocalParts, sLocalParts);
-  allocatePinnedHostMemory((void **)&bufLocalMoments, sLocalMoments);
+  //allocatePinnedHostMemory((void **)&bufLocalParts, sLocalParts);
+  //allocatePinnedHostMemory((void **)&bufLocalMoments, sLocalMoments);
+
+  if (sLocalParts > 0)
+    bufLocalParts = (CompactPartData *) malloc(sLocalParts);
+  else
+    bufLocalParts = NULL;
+
+  if (sLocalMoments > 0)
+    bufLocalMoments = (CudaMultipoleMoments *) malloc(sLocalMoments);
+  else
+    bufLocalMoments = NULL;
 
   int pTPindex = 0;
   treePiecesBufferFilled = 0;
@@ -1017,7 +1035,11 @@ void DataManager::transferLocalToGPU(int numParticles, GenericTreeNode *node)
   traceUserBracketEvent(SER_LOCAL_MEMCPY, starttime, CmiWallTimer());
 #endif
 
-  allocatePinnedHostMemory((void **)&bufLocalVars, sLocalVars);
+  //allocatePinnedHostMemory((void **)&bufLocalVars, sLocalVars);
+  if (sLocalVars > 0)
+    bufLocalVars = (VariablePartData *) malloc(sLocalVars);
+  else
+    bufLocalVars = NULL;
 
   // Transfer moments and particle cores to gpu
   DataManagerTransferLocalTree(bufLocalMoments, sLocalMoments, bufLocalParts,
@@ -1076,21 +1098,32 @@ void updateParticlesCallback(void *, void *);
 
 /// @brief Copy particle accelerations back from GPU to host memory and
 ///        deallocate the device memory
+/// @param numTPs Number of TreePieces that are checking in
 /// This is triggered when all TreePieces call finishBucket
-void DataManager::transferParticleVarsBack(){
+void DataManager::transferParticleVarsBack(int numTPs){
   UpdateParticlesStruct *data;
   CmiLock(__nodelock);
-  PEsWantParticlesBack++;
-  if(PEsWantParticlesBack == registeredPEs.size()){
-    PEsWantParticlesBack = 0;
+  treePiecesWantParticlesBack += numTPs;
+  //CkPrintf("transferParticleVarsBack: %d TPs checking in, %d of %d\n", numTPs, treePiecesWantParticlesBack, registeredTreePieces.length());
+  if(treePiecesWantParticlesBack == registeredTreePieces.size()){
+    localDataDone = false;
+    if(bufRemoteMoments != NULL)
+	free(bufRemoteMoments);
+    if(bufRemoteParts != NULL)
+	free(bufRemoteParts);
+
+    treePiecesWantParticlesBack = 0;
+    for (int i = 0; i < numPEListProxies; i++) {
+      PEListProxies[i]->ckLocalBranch()->setGPUDone(0);
+    }
     VariablePartData *buf;
     
     if(savedNumTotalParticles > 0){
-#ifdef PINNED_HOST_MEMORY
+/*#ifdef PINNED_HOST_MEMORY
       allocatePinnedHostMemory((void **)&buf, savedNumTotalParticles*sizeof(VariablePartData));
-#else
+#else*/
       buf = (VariablePartData *) malloc(savedNumTotalParticles*sizeof(VariablePartData));
-#endif
+//#endif
     }
     else{
       buf = NULL;
@@ -1164,7 +1197,7 @@ void DataManager::updateParticlesFreeMemory(UpdateParticlesStruct *data)
 
         if(data->size > 0){
 #ifdef PINNED_HOST_MEMORY
-            freePinnedHostMemory(data->buf);
+            free(data->buf);
 #else
             free(data->buf);
 #endif

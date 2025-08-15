@@ -93,7 +93,7 @@ protected:
         // XXX - assumes that only one chunk can be on the gpu
         // at a given time
         int treePiecesDoneRemoteChunkComputation;
-        int PEsWantParticlesBack;
+        int treePiecesWantParticlesBack;
         /// Keep track of which PEs have TreePieces
         std::set<int> registeredPEs;
         /// Reference count for Pieces that have finished updating
@@ -124,7 +124,9 @@ protected:
         bool waitForLocalData;
 
         /// Callback pointer to pass to HAPI.
+        CkCallback *ewaldCallback;
         CkCallback *localTransferCallback;
+        CkCallback *localWalkCallback;
 
         PendingBuffers *currentChunkBuffers;
         // queue that stores all pending chunk transfers
@@ -228,10 +230,11 @@ public:
 	void transferLocalToGPU(int nParts, GenericTreeNode *node);
         void freeLocalTreeMemory();
         void freeRemoteChunkMemory(int chunk);
-        void transferParticleVarsBack();
+        void transferParticleVarsBack(int numTPs);
         void updateParticles(UpdateParticlesStruct *data);
         void updateParticlesFreeMemory(UpdateParticlesStruct *data);
         void initiateNextChunkTransfer();
+	int isLocalDataReady() { return localDataDone; }
         DataManager(){}
 
 #endif

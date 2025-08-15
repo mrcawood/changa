@@ -39,6 +39,11 @@ class PEList : public CBase_PEList
 
     cudatype fperiod;
 
+    /// Signal to the TreePieces whether the GPU kernel has completed
+    int bGPUDone;
+    /// Indicate whether GPU kenel launch was delayed by local data transfer
+    int bWaitForLocalData;
+
   public:
     PEList(int _bNode, int _bRemote, int _bResume) {
         bNode = _bNode;
@@ -46,16 +51,21 @@ class PEList : public CBase_PEList
         bResume = _bResume;
 
 	finalBucketMarker = -1;
+	bWaitForLocalData = 0;
 	cudaStreamCreate(&stream);
     }
     PEList(CkMigrateMessage *m) : CBase_PEList(m) {}
     ~PEList() { cudaStreamDestroy(stream); }
     void pup(PUP::er &p) {}
 
-
     void finishWalk(TreePiece *treePiece);
+    void launchGPUKernel();
     void sendList(TreePiece *treePiece, CudaRequest *data);
     void reset();
+    int getNumTPs() { return cTreePieces.count; }
+    void setGPUDone(int val) { bGPUDone = val; }
+    int isGPUDone() { return bGPUDone; }
+    int isWaitingForLocalData() { return bWaitForLocalData; }
 };
 
 #endif
