@@ -128,10 +128,18 @@ void PEList::sendList(TreePiece *treePiece, CudaRequest* data) {
     treePiece->cudaFinishAffectedBuckets(data->affectedBuckets, numBuckets, bRemote);
 
     // deallocate the memory used by the incoming cudaRequest
+#ifdef PINNED_HOST_MEMORY
+    freePinnedHostMemory(data->list);
+    freePinnedHostMemory(data->bucketMarkers);
+    freePinnedHostMemory(data->bucketStarts);
+    freePinnedHostMemory(data->bucketSizes);
+#else
     free(data->list);
     free(data->bucketMarkers);
     free(data->bucketStarts);
     free(data->bucketSizes);
+#endif
+
     delete[] data->affectedBuckets;
     if(data->missedNodes)
       free(data->missedNodes);

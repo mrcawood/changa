@@ -531,6 +531,7 @@ void DataManager::finishLocalWalk() {
 
   // Wait until the local tree walk kernel completes
   // Otherwise these calls block on the kernel execution
+#ifdef PINNED_HOST_MEMORY
   freePinnedHostMemory(bufLocalMoments);
   freePinnedHostMemory(bufLocalParts);
   freePinnedHostMemory(bufLocalVars);
@@ -538,6 +539,15 @@ void DataManager::finishLocalWalk() {
       freePinnedHostMemory(bufRemoteMoments);
   if(bufRemoteParts != NULL)
       freePinnedHostMemory(bufRemoteParts);
+#else
+  free(bufLocalMoments);
+  free(bufLocalParts);
+  free(bufLocalVars);
+  if(bufRemoteMoments != NULL)
+      free(bufRemoteMoments);
+  if(bufRemoteParts != NULL)
+      free(bufRemoteParts);
+#endif
 
 
   for(int i = 0; i < registeredTreePieces.length(); i++){
@@ -546,9 +556,15 @@ void DataManager::finishLocalWalk() {
   }
 
   if (registeredTreePieces[0].treePiece->bEwald) {
+#ifdef PINNED_HOST_MEMORY
     allocatePinnedHostMemory((void **)&h_idata, sizeof(EwaldData)*savedNumTotalParticles-1);
     allocatePinnedHostMemory((void **)&ewt, sizeof(EwtData)*NEWH);
     allocatePinnedHostMemory((void **)&cachedData, sizeof(EwaldReadOnlyData));
+#else
+    h_idata = (EwaldData *) malloc(sizeof(EwaldData)*savedNumTotalParticles-1);
+    ewt = (EwtData *) malloc(sizeof(EwtData)*NEWH);
+    cachedData = (EwaldReadOnlyData *) malloc(sizeof(EwaldReadOnlyData));
+#endif
   }
 
   treePiecesEwaldReady = 0;
@@ -699,14 +715,22 @@ void DataManager::transferPrefetch() {
     // XXX copies can be saved here.
     size_t sRemMoments = lastChunkMoments*sizeof(CudaMultipoleMoments);
     if(sRemMoments > 0) {
+#ifdef PINNED_HOST_MEMORY
 	allocatePinnedHostMemory((void **)&bufRemoteMoments, sRemMoments);
+#else
+	bufRemoteMoments = (CudaMultipoleMoments *) malloc(sRemMoments);
+#endif
 	memcpy(bufRemoteMoments, buffers->moments->getVec(), sRemMoments);
 	}
     else
 	bufRemoteMoments = NULL;
     size_t sRemParts = lastChunkParticles*sizeof(CompactPartData);
     if(sRemParts > 0) {
+#ifdef PINNED_HOST_MEMORY
 	allocatePinnedHostMemory((void **)&bufRemoteParts, sRemParts);
+#else
+	bufRemoteParts = (CompactPartData *) malloc(sRemParts);
+#endif
 	memcpy(bufRemoteParts, buffers->particles->getVec(), sRemParts);
 	}
     else
@@ -964,8 +988,13 @@ void DataManager::serializeLocal(GenericTreeNode *nodeRoot){
 #endif
   size_t sLocalParts = numParticles*sizeof(CompactPartData);
   size_t sLocalMoments = localMoments.length()*sizeof(CudaMultipoleMoments);
+#ifdef PINNED_HOST_MEMORY
   allocatePinnedHostMemory((void **)&bufLocalParts, sLocalParts);
   allocatePinnedHostMemory((void **)&bufLocalMoments, sLocalMoments);
+#else
+  bufLocalParts = (CompactPartData *) malloc(sLocalParts);
+  bufLocalMoments = (CudaMultipoleMoments *) malloc(sLocalMoments);
+#endif
 
   int pTPindex = 0;
   treePiecesBufferFilled = 0;
