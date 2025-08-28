@@ -151,10 +151,20 @@ void PEList::sendList(TreePiece *treePiece, CudaRequest* data) {
 #endif
 
     delete[] data->affectedBuckets;
-    if(data->missedNodes)
+    if(data->missedNodes) {
+#ifdef PINNED_HOST_MEMORY
+      freePinnedHostMemory(data->missedNodes);
+#else
       free(data->missedNodes);
-    if(data->missedParts)
+#endif
+    }
+    if(data->missedParts) {
+#ifdef PINNED_HOST_MEMORY
+      freePinnedHostMemory(data->missedParts);
+#else
       free(data->missedParts);
+#endif
+    }
 }
 
 /// @brief Re-initalize data arrays and clean up callback objects at the end of the step

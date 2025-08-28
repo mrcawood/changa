@@ -44,6 +44,7 @@ void DataManager::init() {
   localDataDone = false;
   waitForLocalData = false;
   cudaStreamCreate(&stream);
+  poolInit(); // Initialize GPU memory pool
   memLog = new MemLog();
   lockMemLog = CmiCreateLock();
   bGpuMemLogger = 0; // Default disabled
@@ -507,9 +508,15 @@ void DataManager::startEwaldGPU() {
 void DataManager::finishEwaldGPU() {
   delete ewaldCallback;
 
+#ifdef PINNED_HOST_MEMORY
+  freePinnedHostMemory(h_idata);
+  freePinnedHostMemory(ewt);
+  freePinnedHostMemory(cachedData);
+#else
   free(h_idata);
   free(ewt);
   free(cachedData);
+#endif
 
   for(int i = 0; i < registeredTreePieces.length(); i++){
       int in = registeredTreePieces[i].treePiece->getIndex();
@@ -533,18 +540,26 @@ void DataManager::finishLocalWalk() {
   freePinnedHostMemory(bufLocalMoments);
   freePinnedHostMemory(bufLocalParts);
   freePinnedHostMemory(bufLocalVars);
-  if(bufRemoteMoments != NULL)
+  if(bufRemoteMoments != NULL) {
       freePinnedHostMemory(bufRemoteMoments);
-  if(bufRemoteParts != NULL)
+      bufRemoteMoments = NULL;
+  }
+  if(bufRemoteParts != NULL) {
       freePinnedHostMemory(bufRemoteParts);
+      bufRemoteParts = NULL;
+  }
 #else
   free(bufLocalMoments);
   free(bufLocalParts);
   free(bufLocalVars);
-  if(bufRemoteMoments != NULL)
+  if(bufRemoteMoments != NULL) {
       free(bufRemoteMoments);
-  if(bufRemoteParts != NULL)
+      bufRemoteMoments = NULL;
+  }
+  if(bufRemoteParts != NULL) {
       free(bufRemoteParts);
+      bufRemoteParts = NULL;
+  }
 #endif
 
   for(int i = 0; i < registeredTreePieces.length(); i++){
@@ -1053,11 +1068,15 @@ void DataManager::transferLocalToGPU(int numParticles, GenericTreeNode *node)
   traceUserBracketEvent(SER_LOCAL_MEMCPY, starttime, CmiWallTimer());
 #endif
 
-  //allocatePinnedHostMemory((void **)&bufLocalVars, sLocalVars);
-  if (sLocalVars > 0)
+  if (sLocalVars > 0) {
+#ifdef PINNED_HOST_MEMORY
+    allocatePinnedHostMemory((void **)&bufLocalVars, sLocalVars);
+#else
     bufLocalVars = (VariablePartData *) malloc(sLocalVars);
-  else
+#endif
+  } else {
     bufLocalVars = NULL;
+  }
 
   // Transfer moments and particle cores to gpu
   DataManagerTransferLocalTree(bufLocalMoments, sLocalMoments, bufLocalParts,
@@ -1125,10 +1144,22 @@ void DataManager::transferParticleVarsBack(int numTPs){
   //CkPrintf("transferParticleVarsBack: %d TPs checking in, %d of %d\n", numTPs, treePiecesWantParticlesBack, registeredTreePieces.length());
   if(treePiecesWantParticlesBack == registeredTreePieces.size()){
     localDataDone = false;
-    if(bufRemoteMoments != NULL)
+    if(bufRemoteMoments != NULL) {
+#ifdef PINNED_HOST_MEMORY
+	freePinnedHostMemory(bufRemoteMoments);
+#else
 	free(bufRemoteMoments);
-    if(bufRemoteParts != NULL)
+#endif
+	bufRemoteMoments = NULL;
+    }
+    if(bufRemoteParts != NULL) {
+#ifdef PINNED_HOST_MEMORY
+	freePinnedHostMemory(bufRemoteParts);
+#else
 	free(bufRemoteParts);
+#endif
+	bufRemoteParts = NULL;
+    }
 
     treePiecesWantParticlesBack = 0;
     for (int i = 0; i < numPEListProxies; i++) {
@@ -1137,11 +1168,11 @@ void DataManager::transferParticleVarsBack(int numTPs){
     VariablePartData *buf;
     
     if(savedNumTotalParticles > 0){
-/*#ifdef PINNED_HOST_MEMORY
+#ifdef PINNED_HOST_MEMORY
       allocatePinnedHostMemory((void **)&buf, savedNumTotalParticles*sizeof(VariablePartData));
-#else*/
+#else
       buf = (VariablePartData *) malloc(savedNumTotalParticles*sizeof(VariablePartData));
-//#endif
+#endif
     }
     else{
       buf = NULL;
@@ -1207,15 +1238,12 @@ void DataManager::updateParticlesFreeMemory(UpdateParticlesStruct *data)
         treePiecesParticlesUpdated = 0;
 
 	  const char* funcTag = "DataManager::transferParticleVarsBack"; // Define the function tag
-    gpuFreeHelper(d_localMoments, funcTag);   
-    gpuFreeHelper(d_localParts, funcTag);    
-    gpuFreeHelper(d_localVars, funcTag);     
-    gpuFreeHelper(d_remoteMoments, funcTag); 
-    gpuFreeHelper(d_remoteParts, funcTag);   
+    // Note: GPU memory is now managed by pool callbacks, not here
+    // The member variables may contain stale pointers from previous allocations   
 
         if(data->size > 0){
 #ifdef PINNED_HOST_MEMORY
-            free(data->buf);
+            freePinnedHostMemory(data->buf);
 #else
             free(data->buf);
 #endif

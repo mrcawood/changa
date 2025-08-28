@@ -7,7 +7,9 @@ enum MemLogOpType {
     MEMLOG_FREE,
     MEMLOG_ALLOC_FAIL,
     MEMLOG_FREE_FAIL,
-    MEMLOG_FREE_SKIP // For attempting to free NULL
+    MEMLOG_FREE_SKIP, // For attempting to free NULL
+    MEMLOG_POOL_REUSE,   
+    MEMLOG_POOL_RELEASE 
 };
 
 /** @brief Holds information about a single CUDA memory event */

@@ -15,6 +15,7 @@
 
 #ifdef CUDA
 #include "memlog.h"
+#include "GPUMemoryPool.h"
 #endif
 
 #if CHARM_VERSION > 60401 && CMK_BALANCED_INJECTION_API
@@ -251,6 +252,7 @@ public:
     	    nodeTable.clear();
 
 #ifdef CUDA
+	    poolDestroy(); // Clean up GPU memory pool
 	    cudaStreamDestroy(stream);
 #endif
 
