@@ -165,8 +165,8 @@ class DoubleWalkState : public State {
 
   /// Map of node to index in node vector being sent to the GPU. This is
   /// used for remote nodes.
-  std::unordered_map<NodeKey,int> nodeMap;
-  std::unordered_map<NodeKey,int> partMap;
+  std::unordered_map<Tree::NodeKey,int> nodeMap;
+  std::unordered_map<Tree::NodeKey,int> partMap;
 
   // TODO do these need to be shut off (no restriction)?
   // The PELists still need to collect the entire interaction list in memory

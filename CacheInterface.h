@@ -13,6 +13,8 @@
 #include "GenericTreeNode.h"
 #include "keytype.h"
 
+static const int PAD_reply = sizeof(NodeKey);
+
 /*********************************************************
  * Gravity interface: Particles
  *********************************************************/

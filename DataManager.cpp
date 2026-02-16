@@ -60,8 +60,8 @@ void DataManager::init() {
   d_localVars = nullptr;
   d_remoteMoments = nullptr;
   d_remoteParts = nullptr;
-  bLocalDataTransferred = false;
-  bRemoteDataTransferred = false;
+  bLocalDataTransferred.store(false);
+  bRemoteDataTransferred.store(false);
 #endif
   Cool = CoolInit();
   LWData = LymanWernerTableInit();
@@ -497,6 +497,8 @@ void DataManager::serializeLocalTree(){
     treePiecesDone = 0;
     CmiUnlock(__nodelock);
 
+    CkPrintf("DM_SLT node %d PE %d serializeLocal starting (%d TPs)\n",
+            CkMyNode(), CkMyPe(), (int)registeredTreePieces.length());
     if(verbosity > 1)
         CkPrintf("[%d] Registered tree pieces length: %lu\n", CkMyPe(), registeredTreePieces.length());
     serializeLocal(root);
@@ -509,6 +511,34 @@ void DataManager::serializeLocalTree(){
 
 /// @brief Get the data produced by TreePiece::EwaldInit and launch the Ewald kernel on the GPU
 void DataManager::startEwaldGPU() {
+  CkPrintf("EW1 [%d] startEwaldGPU entry\n", CkMyPe());
+  if (savedNumTotalParticles <= 0 || d_localParts == nullptr || d_localVars == nullptr) {
+    for (int i = 0; i < registeredTreePieces.length(); i++) {
+      int in = registeredTreePieces[i].treePiece->getIndex();
+      treePieces[in].cudaFinishAllBuckets(1);
+    }
+    return;
+  }
+
+  TreePiece *tp = NULL;
+  for (int i = 0; i < registeredTreePieces.length(); i++) {
+    TreePiece *candidate = registeredTreePieces[i].treePiece;
+    if (candidate->root != NULL && candidate->ewt != NULL && candidate->nEwhLoop > 0) {
+      tp = candidate;
+      break;
+    }
+  }
+  if (tp == NULL) {
+    CkAbort("DataManager::startEwaldGPU: no TreePiece with valid Ewald data (root, ewt, nEwhLoop)");
+  }
+  CkPrintf("EW2 [%d] startEwaldGPU guards passed, tp found\n", CkMyPe());
+
+  int nEwhLoop = tp->nEwhLoop;
+  if (nEwhLoop > NEWH) {
+    CkAbort("DataManager::startEwaldGPU: nEwhLoop (%d) exceeds NEWH (%d); increase NEWH in EwaldCUDA.h",
+            nEwhLoop, NEWH);
+  }
+
 #ifdef PINNED_HOST_MEMORY
   const char* funcTag = "DataManager::startEwaldGPU";
   hostMalloc(&ewt, sizeof(EwtData)*NEWH, funcTag);
@@ -517,12 +547,8 @@ void DataManager::startEwaldGPU() {
   ewt = (EwtData *) malloc(sizeof(EwtData)*NEWH);
   cachedData = (EwaldReadOnlyData *) malloc(sizeof(EwaldReadOnlyData));
 #endif
+  CkPrintf("EW3 [%d] startEwaldGPU ewt/cachedData allocated\n", CkMyPe());
 
-  // Note that much of this data is calculated per TreePiece. It's all identical,
-  // so we just pull from the first TreePiece
-  TreePiece *tp = registeredTreePieces[0].treePiece;
-
-  int nEwhLoop = tp->nEwhLoop;
   MultipoleMoments *mm = &tp->root->moments;
   for (int i=0; i<nEwhLoop; i++) {
     ewt[i].hx = (cudatype) tp->ewt[i].hx;
@@ -531,6 +557,7 @@ void DataManager::startEwaldGPU() {
     ewt[i].hCfac = (cudatype) tp->ewt[i].hCfac;
     ewt[i].hSfac = (cudatype) tp->ewt[i].hSfac;
     }
+  CkPrintf("EW4 [%d] startEwaldGPU ewt copy done (nEwhLoop=%d)\n", CkMyPe(), nEwhLoop);
 
 #ifdef HEXADECAPOLE
   MOMC *momcRoot = &tp->momcRoot;
@@ -607,6 +634,7 @@ void DataManager::startEwaldGPU() {
   ewaldCallback
     = new CkCallback(CkIndex_DataManager::finishEwaldGPU(), CkMyNode(), dMProxy);
 
+  CkPrintf("EW5 [%d] startEwaldGPU calling DataManagerEwald\n", CkMyPe());
   DataManagerEwald(d_localParts, d_localVars, ewt, cachedData, savedNumTotalParticles-1, stream, ewaldCallback);
 }
 
@@ -637,6 +665,9 @@ void DataManager::finishLocalWalk() {
   delete localWalkCallback;
   delete lwReq;
 
+  CkPrintf("DM_FL node %d PE %d calling cudaFinishAllBuckets for %d TPs\n",
+          CkMyNode(), CkMyPe(), (int)registeredTreePieces.length());
+
 #ifdef GPU_LOCAL_TREE_WALK
 #ifdef PINNED_HOST_MEMORY
   // Direct free for large local tree buffers (bypasses pool but logs analytics)
@@ -665,8 +696,9 @@ void DataManager::finishLocalWalk() {
 /// Indicate the transfer is done, and start the local gravity walk
 /// in one big kernel launch
 void DataManager::startLocalWalk() {
+    CkPrintf("DM_SLW node %d PE %d transfer done, launching local walk\n", CmiMyNode(), CkMyPe());
     delete localTransferCallback;
-    bLocalDataTransferred = true;
+    bLocalDataTransferred.store(true);
 
     // We arent calculating local gravity on the CPU, but bookkeeping
     // still needs to be handled
@@ -728,7 +760,9 @@ void DataManager::resumeRemoteChunk() {
   delete currentChunkBuffers->particles;
   delete currentChunkBuffers->cb;
   delete currentChunkBuffers;
-  bRemoteDataTransferred = true;
+  bRemoteDataTransferred.store(true);
+  if (verbosity > 3)
+    CkPrintf("[%d] resumeRemoteChunk: bRemoteDataTransferred set true (chunk %d)\n", CkMyPe(), savedChunk);
 
   // Check and see if the remote walks already finished and are waiting
   // to launch their GPU kernels
@@ -811,6 +845,7 @@ void DataManager::donePrefetch(int chunk){
 				   (void **)&d_remoteMoments,  (void **)&d_remoteParts,
 				   stream,
 				   remoteChunkTransferCallback);
+    bRemoteDataTransferred.store(true);
   }
   CmiUnlock(__nodelock);
 }
@@ -1091,6 +1126,8 @@ void DataManager::transferLocalToGPU(int numParticles)
     if(treePiecesBufferFilled == registeredTreePieces.length()){
         treePiecesBufferFilled = 0;
         CmiUnlock(__nodelock);
+        CkPrintf("DM_TLG node %d PE %d all %d TPs filled, starting transfer\n",
+                CkMyNode(), CkMyPe(), (int)registeredTreePieces.length());
     }
     else {
         CmiUnlock(__nodelock);
@@ -1211,7 +1248,7 @@ void DataManager::transferParticleVarsBack(){
     data->buf = buf;
     data->size = savedNumTotalParticles;
 
-    if(verbosity > 1) CkPrintf("[%d] transferParticleVarsBack\n", CkMyPe());
+    CkPrintf("TB [%d] node %d transferParticleVarsBack\n", CkMyPe(), CmiMyNode());
     TransferParticleVarsBack(buf, 
                              savedNumTotalParticles*sizeof(VariablePartData),
 			     d_localVars,
@@ -1251,6 +1288,7 @@ void DataManager::updateParticles(UpdateParticlesStruct *data){
 
 void updateParticlesCallback(void *param, void *msg){  
   UpdateParticlesStruct *data = (UpdateParticlesStruct *)param;
+  CkPrintf("TB [%d] node %d updateParticlesCallback\n", CkMyPe(), CmiMyNode());
   data->dm->updateParticles(data);
 }
 
@@ -1259,7 +1297,11 @@ void DataManager::updateParticlesFreeMemory(UpdateParticlesStruct *data)
 {
     CmiLock(__nodelock);
     treePiecesParticlesUpdated++;
-    if(treePiecesParticlesUpdated == registeredTreePieces.length()){
+    int total = (int)registeredTreePieces.length();
+    if(total > 50 && treePiecesParticlesUpdated >= total - 50 && treePiecesParticlesUpdated <= total)
+        CkPrintf("TB [%d] node %d updateParticlesFreeMemory %d/%d\n", CkMyPe(), CmiMyNode(), treePiecesParticlesUpdated, total);
+    if(treePiecesParticlesUpdated == total){
+        CkPrintf("TB [%d] node %d all TPs in, cleanup\n", CkMyPe(), CmiMyNode());
         treePiecesParticlesUpdated = 0;
 
     // Free host buffers for remote chunk data
@@ -1284,8 +1326,8 @@ void DataManager::updateParticlesFreeMemory(UpdateParticlesStruct *data)
     gpuPoolFree(d_remoteMoments, stream, funcTag);
     gpuPoolFree(d_remoteParts, stream, funcTag);
 
-    bLocalDataTransferred = false;
-    bRemoteDataTransferred = false;
+    bLocalDataTransferred.store(false);
+    bRemoteDataTransferred.store(false);
     // Set device pointers to nullptr
     d_localMoments = nullptr;
     d_localParts = nullptr;
@@ -1304,6 +1346,7 @@ void DataManager::updateParticlesFreeMemory(UpdateParticlesStruct *data)
         delete (data->cb);
         delete data;
         cudaDeviceSynchronize();
+        CkPrintf("TB [%d] node %d cleanup done\n", CkMyPe(), CmiMyNode());
 
     }
     CmiUnlock(__nodelock);

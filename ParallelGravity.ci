@@ -94,6 +94,13 @@ mainmodule ParallelGravity {
 
   message dummyMsg;
   message ComputeChunkMsg;
+  message RecvNodeCallbackMsg {
+    int chunk;
+    int reqID;
+    int awi;
+    KeyType key;
+    char nodeData[];
+  };
 
 #ifdef CUDA
   message fillGPUMsg{
@@ -514,6 +521,7 @@ mainmodule ParallelGravity {
 
     entry [expedited] void fillRequestNode(CkCacheRequestMsg<KeyType> *msg);
     entry [local] void receiveNodeCallback(GenericTreeNode *node, int chunk, int reqID, int awi, void *source);
+    entry void receiveNodeCallbackFromRemote(RecvNodeCallbackMsg *msg);
     //entry void receiveNode(GenericTreeNode node[1],
     //	       unsigned int reqID);
     //entry void receiveParticle(GravityParticle part,

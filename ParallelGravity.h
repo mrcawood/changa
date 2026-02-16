@@ -343,6 +343,17 @@ struct BucketMsg : public CkMcastBaseMsg, public CMessage_BucketMsg {
 };
 #endif
 
+/// Message for cross-PE node callback (TreePiece migrated after cache request)
+class RecvNodeCallbackMsg : public CMessage_RecvNodeCallbackMsg {
+public:
+  int chunk;
+  int reqID;
+  int awi;
+  KeyType key;
+  char *nodeData;
+  RecvNodeCallbackMsg() {}
+};
+
 #ifdef CUDA
 struct fillGPUMsg: public CMessage_fillGPUMsg {
   int partIndex;
@@ -1173,7 +1184,7 @@ private:
 	/// pool of memory to hold TreeNodes: makes allocation more efficient.
 	NodePool *pTreeNodes;
 
-	typedef std::map<NodeKey, CkVec<int>* >   MomentRequestType;
+	typedef std::map<Tree::NodeKey, CkVec<int>* >   MomentRequestType;
 	/// Keep track of the requests for remote moments not yet satisfied.
 	/// Used only during the tree construction.  This is a map
 	/// from NodeKey to a vector of treepieces that have requested it.
@@ -1958,6 +1969,7 @@ public:
 	    }
 
         void receiveNodeCallback(GenericTreeNode *node, int chunk, int reqID, int awi, void *source);
+        void receiveNodeCallbackFromRemote(RecvNodeCallbackMsg *msg);
         void receiveParticlesCallback(ExternalGravityParticle *egp, int num, int chunk, int reqID, Tree::NodeKey &remoteBucket, int awi, void *source);
         void receiveParticlesFullCallback(GravityParticle *egp, int num, int chunk, int reqID, Tree::NodeKey &remoteBucket, int awi, void *source);
 
@@ -1969,12 +1981,12 @@ public:
         void sendRequestForNonLocalMoments(GenericTreeNode *pickedNode);
         void mergeNonLocalRequestsDone();
         //void addTreeBuildMomentsClient(GenericTreeNode *targetNode, TreePiece *client, GenericTreeNode *clientNode);
-        std::map<NodeKey,NonLocalMomentsClientList>::iterator createTreeBuildMomentsEntry(GenericTreeNode *pickedNode);
+        std::map<Tree::NodeKey,NonLocalMomentsClientList>::iterator createTreeBuildMomentsEntry(GenericTreeNode *pickedNode);
 
 
         private:
         // XXX - hashtable instead of map
-        std::map<NodeKey,NonLocalMomentsClientList> nonLocalMomentsClients;
+        std::map<Tree::NodeKey,NonLocalMomentsClientList> nonLocalMomentsClients;
         bool localTreeBuildComplete;
         int getResponsibleIndex(int first, int last);
         
@@ -1983,7 +1995,7 @@ public:
         void accumulateMomentsFromChild(GenericTreeNode *parent, GenericTreeNode *child);
 
         void deliverMomentsToClients(GenericTreeNode *);
-        void deliverMomentsToClients(const std::map<NodeKey,NonLocalMomentsClientList>::iterator &it);
+        void deliverMomentsToClients(const std::map<Tree::NodeKey,NonLocalMomentsClientList>::iterator &it);
         void treeBuildComplete();
         void processRemoteRequestsForMoments();
         void sendParticlesDuringDD(bool withqd);
