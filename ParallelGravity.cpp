@@ -1678,6 +1678,7 @@ inline int Main::nextMaxRungIncDF(int nextMaxRung)
 inline void Main::waitForGravity(const CkCallback &cb, double startTime,
                                  int activeRung) 
 {
+    CkPrintf("BRK waitForGrav_BEFORE (waiting for 8196 cbG contributions)\n");
     if(param.bConcurrentSph && param.bDoGravity) {
 #ifdef PUSH_GRAVITY
       if(bDoPush){
@@ -1690,6 +1691,7 @@ inline void Main::waitForGravity(const CkCallback &cb, double startTime,
       }
 #endif
     }
+    CkPrintf("BRK waitForGrav_AFTER (reduction complete)\n");
         double tGrav = CkWallTimer()-startTime;
         timings[activeRung].tGrav += tGrav;
         CkPrintf("Calculating gravity and SPH took %g seconds.\n", tGrav);
@@ -2426,7 +2428,9 @@ void Main::advanceBigStep(int iStep) {
     
     if(!param.bStaticTest) {
         // Closing Kick
+        CkPrintf("BRK kick_BEFORE\n");
         kick(true, activeRung, nextMaxRung, cbGravity, gravStartTime);
+        CkPrintf("BRK kick_AFTER\n");
         //SIDM needs to check that it is on on active rung?
         if (activeRung == 0 ) {
             doSIDM(dTime,RungToDt(param.dDelta, activeRung), activeRung);
@@ -2476,7 +2480,9 @@ void Main::advanceBigStep(int iStep) {
 
     double startTime = CkWallTimer();
     CkPrintf("Elapsed time: %g\n", startTime - dSimStartTime);
+    CkPrintf("BRK finishNodeCache_BEFORE\n");
     treeProxy.finishNodeCache(CkCallbackResumeThread());
+    CkPrintf("BRK finishNodeCache_AFTER\n");
     double tCache = CkWallTimer() - startTime;
     timings[activeRung].tCache += tCache;
     if(verbosity)
