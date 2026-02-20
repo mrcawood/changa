@@ -6201,6 +6201,15 @@ void TreePiece::receiveNodeCallback(GenericTreeNode *node, int chunk, int reqID,
   }
   int targetBucket = decodeReqID(reqID);
 
+  // source from userData.d1 can be a dangling pointer if callback runs on wrong PE
+  // (cache delivers before cross-PE forward). Always use bucketList for valid local ref.
+  if (targetBucket < 0 || targetBucket >= numBuckets) {
+    CkPrintf("ERROR [%d] TP %d receiveNodeCallback targetBucket=%d out of range [0,%d)\n",
+             CkMyPe(), thisIndex, targetBucket, numBuckets);
+    CkAbort("receiveNodeCallback invalid targetBucket");
+  }
+  void *sourceSafe = (void *)bucketList[targetBucket];
+
   TreeWalk *tw;
   Compute *compute;
   State *state;
@@ -6235,20 +6244,9 @@ void TreePiece::receiveNodeCallback(GenericTreeNode *node, int chunk, int reqID,
     CkAbort("receiveNodeCallback invalid activeWalk (migration?)");
   }
 
-  // Checkpoint: pinpoint which call faults (remove after debugging). Use stderr for visibility.
-  fprintf(stderr, "RNC [%d] TP %d awi %d BEFORE reassoc\n", CkMyPe(), thisIndex, awi);
-  fflush(stderr);
   tw->reassoc(compute);
-  fprintf(stderr, "RNC [%d] TP %d awi %d BEFORE compute_reassoc\n", CkMyPe(), thisIndex, awi);
-  fflush(stderr);
-  compute->reassoc(source, activeRung, a.o);
-
-  fprintf(stderr, "RNC [%d] TP %d awi %d BEFORE resumeWalk\n", CkMyPe(), thisIndex, awi);
-  fflush(stderr);
+  compute->reassoc(sourceSafe, activeRung, a.o);
   tw->resumeWalk(node, state, chunk, reqID, awi);
-
-  fprintf(stderr, "RNC [%d] TP %d awi %d BEFORE nodeRecvdEvent\n", CkMyPe(), thisIndex, awi);
-  fflush(stderr);
   compute->nodeRecvdEvent(this,chunk,state,targetBucket);
 }
 
@@ -6257,6 +6255,41 @@ void TreePiece::receiveNodeCallbackFromRemote(RecvNodeCallbackMsg *msg) {
   node->unpackNodes();
   void *source = (void *)bucketList[decodeReqID(msg->reqID)];
   receiveNodeCallback(node, msg->chunk, msg->reqID, msg->awi, source);
+  CkFreeMsg(msg);
+}
+
+void TreePiece::receiveParticlesCallbackFromRemote(RecvParticlesCallbackMsg *msg) {
+  void *sourceSafe = (void *)bucketList[decodeReqID(msg->reqID)];
+  Tree::NodeKey remoteBucket = msg->key;
+  receiveParticlesCallback(msg->particles, msg->num, msg->chunk, msg->reqID, remoteBucket, msg->awi, sourceSafe);
+  CkFreeMsg(msg);
+}
+
+void TreePiece::receiveParticlesFullCallbackFromRemote(RecvParticlesFullCallbackMsg *msg) {
+  void *sourceSafe = (void *)bucketList[decodeReqID(msg->reqID)];
+  Tree::NodeKey remoteBucket = msg->key;
+  int nTotal = 1 + msg->end - msg->begin;
+  GravityParticle *partCached = new GravityParticle[nTotal];
+  CkAssert(sizeof(extraSPHData) > sizeof(extraStarData));
+  extraSPHData *extraSPHCached = new extraSPHData[msg->nActual];
+  int j = 0;
+  for (int i = 0; i < nTotal; i++) {
+    if (j < msg->nActual && i == msg->partExt[j].iBucketOff) {
+      partCached[i].extraData = &extraSPHCached[j];
+      msg->partExt[j].getParticle(&partCached[i]);
+      CkAssert(TYPETest(&partCached[i], globalSmoothParams->iType));
+      globalSmoothParams->initSmoothCache(&partCached[i]);
+      j++;
+    } else {
+      partCached[i].iType = 0;
+    }
+  }
+  CkAssert(j == msg->nActual);
+  pendingRecvdPartAlloc = partCached;
+  pendingRecvdExtraAlloc = extraSPHCached;
+  receiveParticlesFullCallback(partCached, nTotal, msg->chunk, msg->reqID, remoteBucket, msg->awi, sourceSafe);
+  pendingRecvdPartAlloc = NULL;
+  pendingRecvdExtraAlloc = NULL;
   CkFreeMsg(msg);
 }
 
@@ -6324,7 +6357,7 @@ void TreePiece::receiveParticlesFullCallback(GravityParticle *gp, int num,
   state = a.s;
 
   c->reassoc(source, activeRung, a.o);
-  c->recvdParticlesFull(gp,num,chunk,reqID,state,this, remoteBucket);
+  c->recvdParticlesFull(gp,num,chunk,reqID,state,this, remoteBucket, pendingRecvdPartAlloc, pendingRecvdExtraAlloc);
 }
 
 void TreePiece::addActiveWalk(int iAwi, TreeWalk *tw, Compute *c, Opt *o,

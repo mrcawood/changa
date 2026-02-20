@@ -354,6 +354,32 @@ public:
   RecvNodeCallbackMsg() {}
 };
 
+/// Message for cross-PE particle callback (same pointer-smuggling fix as node cache)
+class RecvParticlesCallbackMsg : public CMessage_RecvParticlesCallbackMsg {
+public:
+  int chunk;
+  int reqID;
+  int awi;
+  KeyType key;
+  int num;
+  ExternalGravityParticle *particles;
+  RecvParticlesCallbackMsg() {}
+};
+
+/// Message for cross-PE smooth particle full callback (same pointer-smuggling fix)
+class RecvParticlesFullCallbackMsg : public CMessage_RecvParticlesFullCallbackMsg {
+public:
+  int chunk;
+  int reqID;
+  int awi;
+  KeyType key;
+  int begin;
+  int end;
+  int nActual;
+  ExternalSmoothParticle *partExt;
+  RecvParticlesFullCallbackMsg() {}
+};
+
 #ifdef CUDA
 struct fillGPUMsg: public CMessage_fillGPUMsg {
   int partIndex;
@@ -827,6 +853,9 @@ class TreePiece : public CBase_TreePiece {
    int nCacheAccesses; // keep track of outstanding cache accesses to
 		       // know when writebacks complete.  XXX this
 		       // should be part of the smooth state
+   /// Allocations from receiveParticlesFullCallbackFromRemote; recvdParticlesFull registers for deferred free.
+   GravityParticle *pendingRecvdPartAlloc;
+   extraSPHData *pendingRecvdExtraAlloc;
    
    /// number of active particles on the last active rung for load balancing
    unsigned int nPrevActiveParts;
@@ -1419,6 +1448,8 @@ public:
 	  pTreeNodes = NULL;
 	  bucketReqs=NULL;
 	  nCacheAccesses = 0;
+	  pendingRecvdPartAlloc = NULL;
+	  pendingRecvdExtraAlloc = NULL;
 	  memWithCache = 0;
 	  memPostCache = 0;
 	  nNodeCacheEntries = 0;
@@ -1496,6 +1527,8 @@ public:
 	  bucketReqs = NULL;
 	  numChunks=-1;
 	  nCacheAccesses = 0;
+	  pendingRecvdPartAlloc = NULL;
+	  pendingRecvdExtraAlloc = NULL;
 	  memWithCache = 0;
 	  memPostCache = 0;
 	  nNodeCacheEntries = 0;
@@ -1971,6 +2004,8 @@ public:
         void receiveNodeCallback(GenericTreeNode *node, int chunk, int reqID, int awi, void *source);
         void receiveNodeCallbackFromRemote(RecvNodeCallbackMsg *msg);
         void receiveParticlesCallback(ExternalGravityParticle *egp, int num, int chunk, int reqID, Tree::NodeKey &remoteBucket, int awi, void *source);
+        void receiveParticlesCallbackFromRemote(RecvParticlesCallbackMsg *msg);
+        void receiveParticlesFullCallbackFromRemote(RecvParticlesFullCallbackMsg *msg);
         void receiveParticlesFullCallback(GravityParticle *egp, int num, int chunk, int reqID, Tree::NodeKey &remoteBucket, int awi, void *source);
 
         void balanceBeforeInitialForces(const CkCallback &cb);

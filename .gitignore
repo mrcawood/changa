@@ -27,3 +27,9 @@ cuda.mk
 
 # Dependency files
 *.d
+
+# Build output
+metal/
+
+# Run logs and analysis (move key .md to repo root if needed)
+logs/

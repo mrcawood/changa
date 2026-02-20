@@ -80,7 +80,8 @@ class Compute{
   /// Allow book-keeping of a cache receive event.
   virtual void recvdParticles(ExternalGravityParticle *egp,int num,int chunk,int reqID,State *state, TreePiece *tp, Tree::NodeKey &remoteBucket){}
   /// Allow book-keeping of a cache receive event.
-  virtual void recvdParticlesFull(GravityParticle *egp,int num,int chunk,int reqID,State *state, TreePiece *tp, Tree::NodeKey &remoteBucket){}
+  /// allocPart/allocExtra: when non-NULL, deferred-freed after walkDone (smooth cache).
+  virtual void recvdParticlesFull(GravityParticle *egp,int num,int chunk,int reqID,State *state, TreePiece *tp, Tree::NodeKey &remoteBucket, GravityParticle *allocPart=0, extraSPHData *allocExtra=0){}
   virtual ~Compute(){}
   virtual void walkDone(State *state){}
   virtual void setComputeEntity(void *ce){
