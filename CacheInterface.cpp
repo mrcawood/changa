@@ -59,13 +59,23 @@ int EntryTypeGravityParticle::size(void * data) {
 /// @param chunk Which chunk is this for.
 void EntryTypeGravityParticle::callback(CkArrayID requestorID, CkArrayIndexMax &requestorIdx, KeyType key, CkCacheUserData &userData, void *data, int chunk) {
   CkArrayIndex1D idx(requestorIdx.data()[0]);
-  CProxyElement_TreePiece elem(requestorID, idx);
   CacheParticle *cp = (CacheParticle *)data;
   int reqID = (int)(userData.d0 & 0xFFFFFFFF);
   int awi = userData.d0 >> 32;
-  void *source = (void *)userData.d1;
+  int num = cp->end - cp->begin + 1;
 
-  elem.receiveParticlesCallback(cp->part, cp->end - cp->begin + 1, chunk, reqID, key, awi, source);
+  // Always serialize and send via receiveParticlesCallbackFromRemote. Never pass raw pointers
+  // (cp->part, source) across PEs -- same pointer-smuggling fix as node cache.
+  RecvParticlesCallbackMsg *msg = new (num, 0) RecvParticlesCallbackMsg();
+  msg->chunk = chunk;
+  msg->reqID = reqID;
+  msg->awi = awi;
+  msg->key = key;
+  msg->num = num;
+  for (int i = 0; i < num; i++) {
+    msg->particles[i] = cp->part[i];
+  }
+  treeProxy[requestorIdx.data()[0]].receiveParticlesCallbackFromRemote(msg);
 }
 
 
@@ -179,16 +189,31 @@ int EntryTypeSmoothParticle::size(void * data) {
 }
 
 void EntryTypeSmoothParticle::callback(CkArrayID requestorID, CkArrayIndexMax &requestorIdx, KeyType key, CkCacheUserData &userData, void *data, int chunk) {
-  CkArrayIndex1D idx(requestorIdx.data()[0]);
-  CProxyElement_TreePiece elem(requestorID, idx);
+  CacheSmoothParticle *cPart = (CacheSmoothParticle *)data;
   int reqID = (int)(userData.d0 & 0xFFFFFFFF);
   int awi = userData.d0 >> 32;
-  void *source = (void *)userData.d1;
-  CacheSmoothParticle *cPart = (CacheSmoothParticle *)data;
 
-  elem.receiveParticlesFullCallback(cPart->partCached,
-				cPart->end - cPart->begin + 1, chunk, reqID,
-				key, awi, source);
+  // Always serialize and send via receiveParticlesFullCallbackFromRemote. Never pass raw pointers
+  // (cPart->partCached, source) across PEs -- same pointer-smuggling fix as gravity particle cache.
+  int nActual = cPart->nActual;
+  RecvParticlesFullCallbackMsg *msg = new (nActual, 0) RecvParticlesFullCallbackMsg();
+  msg->chunk = chunk;
+  msg->reqID = reqID;
+  msg->awi = awi;
+  msg->key = key;
+  msg->begin = cPart->begin;
+  msg->end = cPart->end;
+  msg->nActual = nActual;
+  int j = 0;
+  for (int i = 0; i < 1 + cPart->end - cPart->begin; ++i) {
+    if (cPart->partCached[i].iType != 0) {
+      msg->partExt[j] = cPart->partCached[i].getExternalSmoothParticle();
+      msg->partExt[j].iBucketOff = i;
+      j++;
+    }
+  }
+  CkAssert(j == nActual);
+  treeProxy[requestorIdx.data()[0]].receiveParticlesFullCallbackFromRemote(msg);
 }
 
 // satisfy buffered requests
@@ -432,35 +457,25 @@ void EntryTypeGravityNode::callback(CkArrayID requestorID, CkArrayIndexMax &requ
              CkMyPe(), (int)requestorIdx.data()[0], chunk);
     CkAbort("EntryTypeGravityNode::callback NULL data");
   }
-  CProxy_TreePiece requestorProxy(requestorID);
   CkArrayIndex1D idx(requestorIdx.data()[0]);
-  int requestorPe = requestorProxy.ckLocMgr()->whichPe(idx);
-  if (requestorPe < 0) {
-    CkPrintf("ERROR [%d] EntryTypeGravityNode::callback cannot determine PE for requestor %d\n",
-             CkMyPe(), (int)requestorIdx.data()[0]);
-    CkAbort("EntryTypeGravityNode::callback whichPe failed");
-  }
   int reqID = (int)(userData.d0 & 0xFFFFFFFF);
   int awi = userData.d0 >> 32;
 
-  if (requestorPe != CkMyPe()) {
-    // Cross-PE: requestor migrated since request. Serialize node and send.
-    Tree::BinaryTreeNode *node = (Tree::BinaryTreeNode *)data;
-    int count = node->countDepth(_cacheLineDepth);
-    size_t nodeDataSize = PAD_reply + count * ALIGN_DEFAULT(sizeof(Tree::BinaryTreeNode) + PAD_reply);
-    RecvNodeCallbackMsg *fwd = new (nodeDataSize) RecvNodeCallbackMsg();
-    fwd->chunk = chunk;
-    fwd->reqID = reqID;
-    fwd->awi = awi;
-    fwd->key = key;
-    Tree::BinaryTreeNode *dst = (Tree::BinaryTreeNode *)(fwd->nodeData + PAD_reply);
-    node->packNodes(dst, _cacheLineDepth, PAD_reply);
-    treeProxy[requestorIdx.data()[0]].receiveNodeCallbackFromRemote(fwd);
-    return;
-  }
-  CProxyElement_TreePiece elem(requestorID, idx);
-  void *source = (void *)userData.d1;
-  elem.receiveNodeCallback((Tree::GenericTreeNode*)data, chunk, reqID, awi, source);
+  // Always serialize and send via receiveNodeCallbackFromRemote. Never pass raw pointers
+  // (node, source) across PEs -- they are only valid on this PE. The [local] entry
+  // receiveNodeCallback cannot safely receive them when invoked remotely; and whichPe
+  // could be stale or wrong. Serializing guarantees the TreePiece gets valid local data.
+  Tree::BinaryTreeNode *node = (Tree::BinaryTreeNode *)data;
+  int count = node->countDepth(_cacheLineDepth);
+  size_t nodeDataSize = PAD_reply + count * ALIGN_DEFAULT(sizeof(Tree::BinaryTreeNode) + PAD_reply);
+  RecvNodeCallbackMsg *fwd = new (nodeDataSize) RecvNodeCallbackMsg();
+  fwd->chunk = chunk;
+  fwd->reqID = reqID;
+  fwd->awi = awi;
+  fwd->key = key;
+  Tree::BinaryTreeNode *dst = (Tree::BinaryTreeNode *)(fwd->nodeData + PAD_reply);
+  node->packNodes(dst, _cacheLineDepth, PAD_reply);
+  treeProxy[requestorIdx.data()[0]].receiveNodeCallbackFromRemote(fwd);
 }
 
 

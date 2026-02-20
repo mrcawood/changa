@@ -149,12 +149,18 @@ void SmoothCompute::nodeMissedEvent(int reqID, int chunk, State *state, TreePiec
     state->counterArrays[0][reqIDlist]++;
     }
 
+void NearNeighborState::initPendingFrees(int nBuckets) {
+  nPendingFreesBuckets = nBuckets;
+  pendingFrees = new CkVec<RecvdSmoothPartAlloc>[nBuckets];
+}
+
 // called after constructor, so tp should be set
 State *KNearestSmoothCompute::getNewState(int nBuckets){
   NearNeighborState *state = new NearNeighborState(tp->myNumParticles+2, nSmooth);
   // array to keep track of outstanding requests
   state->counterArrays[0] = new int [nBuckets];
   state->counterArrays[1] = 0;
+  state->initPendingFrees(nBuckets);
 
   for(int j = 0; j < nBuckets; ++j){
     state->counterArrays[0][j] = 1;	// so we know that the local
@@ -287,15 +293,25 @@ void KNearestSmoothCompute::bucketCompare(TreePiece *ownerTP,
 
 /**
  * Process particles received from missed Cache request
+ * When allocPart/allocExtra are non-NULL, they are deferred-freed after walkDone.
  */
 void KNearestSmoothCompute::recvdParticlesFull(GravityParticle *part,
 				   int num, int chunk,int reqID, State *state,
-				   TreePiece *tp, Tree::NodeKey &remoteBucket){
+				   TreePiece *tp, Tree::NodeKey &remoteBucket,
+				   GravityParticle *allocPart, extraSPHData *allocExtra){
 
   Vector3D<cosmoType> offset = tp->decodeOffset(reqID);
   int reqIDlist = decodeReqID(reqID);
   CkAssert(num > 0);
   state->counterArrays[0][reqIDlist] -= num;
+
+  if (allocPart && allocExtra) {
+    NearNeighborState *nstate = (NearNeighborState *)state;
+    RecvdSmoothPartAlloc a;
+    a.part = allocPart;
+    a.extra = allocExtra;
+    nstate->pendingFrees[reqIDlist].push_back(a);
+  }
 
   GenericTreeNode* reqnode = tp->bucketList[reqIDlist];
 
@@ -668,6 +684,13 @@ void NearNeighborState::finishBucketSmooth(int iBucket, TreePiece *tp) {
 
   if(counterArrays[0][iBucket] == 0) {
     tp->sSmooth->walkDone(this);
+    if (pendingFrees && iBucket < nPendingFreesBuckets) {
+      for (int j = 0; j < pendingFrees[iBucket].length(); j++) {
+	delete[] pendingFrees[iBucket][j].part;
+	delete[] pendingFrees[iBucket][j].extra;
+      }
+      pendingFrees[iBucket].clear();
+    }
     if(verbosity>4)
 	CkPrintf("[%d] TreePiece %d finished smooth with bucket %d\n",CkMyPe(),
 		 tp->thisIndex,iBucket);
@@ -780,11 +803,17 @@ void KNearestSmoothCompute::walkDone(State *state) {
 /// @brief Allocate ReNearNeighborState
 ///
 /// called after constructor, so tp should be set
+void ReNearNeighborState::initPendingFrees(int nBuckets) {
+  nPendingFreesBuckets = nBuckets;
+  pendingFrees = new CkVec<RecvdSmoothPartAlloc>[nBuckets];
+}
+
 State *ReSmoothCompute::getNewState(int nBucket){
   ReNearNeighborState *state = new ReNearNeighborState(tp->myNumParticles+2);
   // array to keep track of outstanding requests
   state->counterArrays[0] = new int [nBucket];
   state->counterArrays[1] = 0;
+  state->initPendingFrees(nBucket);
   for (int j = 0; j < nBucket; ++j) {
     state->counterArrays[0][j] = 1;	// so we know that the local
 					// walk is not finished.
@@ -869,12 +898,21 @@ void ReSmoothCompute::bucketCompare(TreePiece *ownerTP,
  */
 void ReSmoothCompute::recvdParticlesFull(GravityParticle *part,
 				   int num, int chunk,int reqID, State *state,
-				   TreePiece *tp, Tree::NodeKey &remoteBucket){
+				   TreePiece *tp, Tree::NodeKey &remoteBucket,
+				   GravityParticle *allocPart, extraSPHData *allocExtra){
 
   Vector3D<cosmoType> offset = tp->decodeOffset(reqID);
   int reqIDlist = decodeReqID(reqID);
   CkAssert(num > 0);
   state->counterArrays[0][reqIDlist] -= num;
+
+  if (allocPart && allocExtra) {
+    ReNearNeighborState *nstate = (ReNearNeighborState *)state;
+    RecvdSmoothPartAlloc a;
+    a.part = allocPart;
+    a.extra = allocExtra;
+    nstate->pendingFrees[reqIDlist].push_back(a);
+  }
 
   GenericTreeNode* reqnode = tp->bucketList[reqIDlist];
 
@@ -992,6 +1030,13 @@ void ReNearNeighborState::finishBucketSmooth(int iBucket, TreePiece *tp) {
 
   if(counterArrays[0][iBucket] == 0) {
       tp->sSmooth->walkDone(this);
+    if (pendingFrees && iBucket < nPendingFreesBuckets) {
+      for (int j = 0; j < pendingFrees[iBucket].length(); j++) {
+	delete[] pendingFrees[iBucket][j].part;
+	delete[] pendingFrees[iBucket][j].extra;
+      }
+      pendingFrees[iBucket].clear();
+    }
     nParticlesPending -= node->particleCount;
   if(verbosity>4)
 	CkPrintf("[%d] TreePiece %d finished resmooth with bucket %d, %d Pending\n",CkMyPe(),
@@ -1032,10 +1077,16 @@ void ReSmoothCompute::walkDone(State *state) {
 }
 
 // called after constructor, so tp should be set
+void MarkNeighborState::initPendingFrees(int nBuckets) {
+  nPendingFreesBuckets = nBuckets;
+  pendingFrees = new CkVec<RecvdSmoothPartAlloc>[nBuckets];
+}
+
 State *MarkSmoothCompute::getNewState(int nBucket){
   MarkNeighborState *state = new MarkNeighborState(tp->myNumParticles+2);
   state->counterArrays[0] = new int [nBucket];
   state->counterArrays[1] = 0;
+  state->initPendingFrees(nBucket);
   for (int j = 0; j < nBucket; ++j) {
     state->counterArrays[0][j] = 1;	// so we know that the local
 					// walk is not finished.
@@ -1102,12 +1153,21 @@ void MarkSmoothCompute::bucketCompare(TreePiece *ownerTP,
  */
 void MarkSmoothCompute::recvdParticlesFull(GravityParticle *part,
 				   int num, int chunk,int reqID, State *state,
-				   TreePiece *tp, Tree::NodeKey &remoteBucket){
+				   TreePiece *tp, Tree::NodeKey &remoteBucket,
+				   GravityParticle *allocPart, extraSPHData *allocExtra){
 
   Vector3D<cosmoType> offset = tp->decodeOffset(reqID);
   int reqIDlist = decodeReqID(reqID);
   CkAssert(num > 0);
   state->counterArrays[0][reqIDlist] -= num;
+
+  if (allocPart && allocExtra) {
+    MarkNeighborState *nstate = (MarkNeighborState *)state;
+    RecvdSmoothPartAlloc a;
+    a.part = allocPart;
+    a.extra = allocExtra;
+    nstate->pendingFrees[reqIDlist].push_back(a);
+  }
 
   GenericTreeNode* reqnode = tp->bucketList[reqIDlist];
 
@@ -1205,6 +1265,13 @@ void MarkNeighborState::finishBucketSmooth(int iBucket, TreePiece *tp) {
 
   if(counterArrays[0][iBucket] == 0) {
       tp->sSmooth->walkDone(this);
+    if (pendingFrees && iBucket < nPendingFreesBuckets) {
+      for (int j = 0; j < pendingFrees[iBucket].length(); j++) {
+	delete[] pendingFrees[iBucket][j].part;
+	delete[] pendingFrees[iBucket][j].extra;
+      }
+      pendingFrees[iBucket].clear();
+    }
   if(verbosity>4)
 	CkPrintf("[%d] TreePiece %d finished smooth with bucket %d\n",CkMyPe(),
 		 tp->thisIndex,iBucket);

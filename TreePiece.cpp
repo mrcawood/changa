@@ -6168,6 +6168,15 @@ checkWalkCorrectness();
 void TreePiece::receiveNodeCallback(GenericTreeNode *node, int chunk, int reqID, int awi, void *source){
   int targetBucket = decodeReqID(reqID);
 
+  // source from userData.d1 can be a dangling pointer if callback runs on wrong PE
+  // (cache delivers before cross-PE forward). Always use bucketList for valid local ref.
+  if (targetBucket < 0 || targetBucket >= numBuckets) {
+    CkPrintf("ERROR [%d] TP %d receiveNodeCallback targetBucket=%d out of range [0,%d)\n",
+             CkMyPe(), thisIndex, targetBucket, numBuckets);
+    CkAbort("receiveNodeCallback invalid targetBucket");
+  }
+  void *sourceSafe = (void *)bucketList[targetBucket];
+
   TreeWalk *tw;
   Compute *compute;
   State *state;
@@ -6192,18 +6201,16 @@ void TreePiece::receiveNodeCallback(GenericTreeNode *node, int chunk, int reqID,
   compute = a.c;
   state = a.s;
 
-  // reassociate objects with each other
+  if (tw == NULL || compute == NULL || state == NULL) {
+    CkPrintf("ERROR [%d] TP %d receiveNodeCallback activeWalk[%d] has NULL tw=%p c=%p s=%p\n",
+             CkMyPe(), thisIndex, awi, (void*)tw, (void*)compute, (void*)state);
+    CkAbort("receiveNodeCallback invalid activeWalk (migration?)");
+  }
+
+  void *sourceSafe = (void *)bucketList[decodeReqID(reqID)];
   tw->reassoc(compute);
-  compute->reassoc(source, activeRung, a.o);
-
-  // resume walk
+  compute->reassoc(sourceSafe, activeRung, a.o);
   tw->resumeWalk(node, state, chunk, reqID, awi);
-
-  // we need source to update the counters in all buckets
-  // underneath the source. note that in the interlist walk,
-  // the computeEntity of the compute will likely  have changed as the walk continued.
-  // however, the resumeWalk function takes care to set it back to 'source'
-  // after it is done walking.
   compute->nodeRecvdEvent(this,chunk,state,targetBucket);
 }
 
@@ -6212,6 +6219,41 @@ void TreePiece::receiveNodeCallbackFromRemote(RecvNodeCallbackMsg *msg) {
   node->unpackNodes();
   void *source = (void *)bucketList[decodeReqID(msg->reqID)];
   receiveNodeCallback(node, msg->chunk, msg->reqID, msg->awi, source);
+  CkFreeMsg(msg);
+}
+
+void TreePiece::receiveParticlesCallbackFromRemote(RecvParticlesCallbackMsg *msg) {
+  void *sourceSafe = (void *)bucketList[decodeReqID(msg->reqID)];
+  Tree::NodeKey remoteBucket = msg->key;
+  receiveParticlesCallback(msg->particles, msg->num, msg->chunk, msg->reqID, remoteBucket, msg->awi, sourceSafe);
+  CkFreeMsg(msg);
+}
+
+void TreePiece::receiveParticlesFullCallbackFromRemote(RecvParticlesFullCallbackMsg *msg) {
+  void *sourceSafe = (void *)bucketList[decodeReqID(msg->reqID)];
+  Tree::NodeKey remoteBucket = msg->key;
+  int nTotal = 1 + msg->end - msg->begin;
+  GravityParticle *partCached = new GravityParticle[nTotal];
+  CkAssert(sizeof(extraSPHData) > sizeof(extraStarData));
+  extraSPHData *extraSPHCached = new extraSPHData[msg->nActual];
+  int j = 0;
+  for (int i = 0; i < nTotal; i++) {
+    if (j < msg->nActual && i == msg->partExt[j].iBucketOff) {
+      partCached[i].extraData = &extraSPHCached[j];
+      msg->partExt[j].getParticle(&partCached[i]);
+      CkAssert(TYPETest(&partCached[i], globalSmoothParams->iType));
+      globalSmoothParams->initSmoothCache(&partCached[i]);
+      j++;
+    } else {
+      partCached[i].iType = 0;
+    }
+  }
+  CkAssert(j == msg->nActual);
+  pendingRecvdPartAlloc = partCached;
+  pendingRecvdExtraAlloc = extraSPHCached;
+  receiveParticlesFullCallback(partCached, nTotal, msg->chunk, msg->reqID, remoteBucket, msg->awi, sourceSafe);
+  pendingRecvdPartAlloc = NULL;
+  pendingRecvdExtraAlloc = NULL;
   CkFreeMsg(msg);
 }
 
@@ -6279,7 +6321,7 @@ void TreePiece::receiveParticlesFullCallback(GravityParticle *gp, int num,
   state = a.s;
 
   c->reassoc(source, activeRung, a.o);
-  c->recvdParticlesFull(gp,num,chunk,reqID,state,this, remoteBucket);
+  c->recvdParticlesFull(gp,num,chunk,reqID,state,this, remoteBucket, pendingRecvdPartAlloc, pendingRecvdExtraAlloc);
 }
 
 void TreePiece::addActiveWalk(int iAwi, TreeWalk *tw, Compute *c, Opt *o,

@@ -102,6 +102,26 @@ mainmodule ParallelGravity {
     char nodeData[];
   };
 
+  message RecvParticlesCallbackMsg {
+    int chunk;
+    int reqID;
+    int awi;
+    KeyType key;
+    int num;
+    ExternalGravityParticle particles[];
+  };
+
+  message RecvParticlesFullCallbackMsg {
+    int chunk;
+    int reqID;
+    int awi;
+    KeyType key;
+    int begin;
+    int end;
+    int nActual;
+    ExternalSmoothParticle partExt[];
+  };
+
 #ifdef CUDA
   message fillGPUMsg{
     int partIndex;
@@ -529,6 +549,8 @@ mainmodule ParallelGravity {
     entry [expedited] void fillRequestSmoothParticles(CkCacheRequestMsg<KeyType> *msg);
     entry void flushSmoothParticles(CkCacheFillMsg<KeyType> *msg);
     entry [local] void receiveParticlesCallback(ExternalGravityParticle *egp, int num, int chunk, int reqID, Tree::NodeKey &remoteBucket, int awi, void *source);
+    entry void receiveParticlesCallbackFromRemote(RecvParticlesCallbackMsg *msg);
+    entry void receiveParticlesFullCallbackFromRemote(RecvParticlesFullCallbackMsg *msg);
     entry [local] void receiveParticlesFullCallback(GravityParticle *egp, int num, int chunk, int reqID, Tree::NodeKey &remoteBucket, int awi, void *source);
 
     // jetley

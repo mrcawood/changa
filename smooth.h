@@ -22,6 +22,12 @@ class pqSmoothNode
     };
 
 	
+/// Allocation to free after walkDone (defer until bucket is done).
+struct RecvdSmoothPartAlloc {
+    GravityParticle *part;
+    extraSPHData *extra;
+};
+
 /// Object to bookkeep a Bucket Smooth Walk.
 
 class NearNeighborState: public State {
@@ -30,15 +36,29 @@ public:
     int nParticlesPending;
     int mynParts; 
     bool started;
-    
+    /// Per-bucket allocations from remote cache; freed after walkDone.
+    CkVec<RecvdSmoothPartAlloc> *pendingFrees;
+    int nPendingFreesBuckets;
+
     NearNeighborState(int nParts, int nSmooth) {
         Qs = new CkVec<pqSmoothNode>[nParts+2];
-	mynParts = nParts; 
+	mynParts = nParts;
+	pendingFrees = NULL;
+	nPendingFreesBuckets = 0;
         }
 
     void finishBucketSmooth(int iBucket, TreePiece *tp);
+    void initPendingFrees(int nBuckets);
     ~NearNeighborState() {
-	delete [] Qs; 
+	delete [] Qs;
+	if (pendingFrees) {
+	    for (int i = 0; i < nPendingFreesBuckets; i++)
+		for (int j = 0; j < pendingFrees[i].length(); j++) {
+		    delete[] pendingFrees[i][j].part;
+		    delete[] pendingFrees[i][j].extra;
+		}
+	    delete[] pendingFrees;
+	}
         }
 };
 
@@ -154,7 +174,8 @@ public:
     void nodeRecvdEvent(TreePiece *owner, int chunk, State *state, int bucket);
     void recvdParticlesFull(GravityParticle *egp,int num,int chunk,
 			int reqID,State *state, TreePiece *tp,
-			Tree::NodeKey &remoteBucket);
+			Tree::NodeKey &remoteBucket,
+			GravityParticle *allocPart=0, extraSPHData *allocExtra=0);
     void walkDone(State *state) ;
 
     // this function is used to allocate and initialize a new state object
@@ -175,11 +196,26 @@ public:
     CkVec<pqSmoothNode> *Qs;
     int nParticlesPending;
     bool started;
+    CkVec<RecvdSmoothPartAlloc> *pendingFrees;
+    int nPendingFreesBuckets;
     ReNearNeighborState(int nParts) {
 	Qs = new CkVec<pqSmoothNode>[nParts+2];
+	pendingFrees = NULL;
+	nPendingFreesBuckets = 0;
 	}
     void finishBucketSmooth(int iBucket, TreePiece *tp);
-    ~ReNearNeighborState() { delete [] Qs; }
+    void initPendingFrees(int nBuckets);
+    ~ReNearNeighborState() {
+	delete [] Qs;
+	if (pendingFrees) {
+	    for (int i = 0; i < nPendingFreesBuckets; i++)
+		for (int j = 0; j < pendingFrees[i].length(); j++) {
+		    delete[] pendingFrees[i][j].part;
+		    delete[] pendingFrees[i][j].extra;
+		}
+	    delete[] pendingFrees;
+	}
+    }
 };
 
 /// @brief Class for computation over a set smoothing length
@@ -207,7 +243,8 @@ public:
     void nodeRecvdEvent(TreePiece *owner, int chunk, State *state, int bucket);
     void recvdParticlesFull(GravityParticle *egp,int num,int chunk,
 			int reqID,State *state, TreePiece *tp,
-			Tree::NodeKey &remoteBucket);
+			Tree::NodeKey &remoteBucket,
+			GravityParticle *allocPart=0, extraSPHData *allocExtra=0);
     void walkDone(State *state) ;
 
     // this function is used to allocate and initialize a new state object
@@ -245,7 +282,8 @@ public:
     void nodeRecvdEvent(TreePiece *owner, int chunk, State *state, int bucket);
     void recvdParticlesFull(GravityParticle *egp,int num,int chunk,
 			int reqID,State *state, TreePiece *tp,
-			Tree::NodeKey &remoteBucket);
+			Tree::NodeKey &remoteBucket,
+			GravityParticle *allocPart=0, extraSPHData *allocExtra=0);
     void walkDone(State *state) ;
 
     // this function is used to allocate and initialize a new state object
@@ -262,9 +300,21 @@ class MarkNeighborState: public State {
 public:
     int nParticlesPending;
     bool started;
-    MarkNeighborState(int nParts) {}
+    CkVec<RecvdSmoothPartAlloc> *pendingFrees;
+    int nPendingFreesBuckets;
+    MarkNeighborState(int nParts) : pendingFrees(NULL), nPendingFreesBuckets(0) {}
     void finishBucketSmooth(int iBucket, TreePiece *tp);
-    ~MarkNeighborState() {}
+    void initPendingFrees(int nBuckets);
+    ~MarkNeighborState() {
+	if (pendingFrees) {
+	    for (int i = 0; i < nPendingFreesBuckets; i++)
+		for (int j = 0; j < pendingFrees[i].length(); j++) {
+		    delete[] pendingFrees[i][j].part;
+		    delete[] pendingFrees[i][j].extra;
+		}
+	    delete[] pendingFrees;
+	}
+    }
 };
 
 #include "Opt.h"
