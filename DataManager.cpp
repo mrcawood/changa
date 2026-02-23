@@ -503,6 +503,32 @@ void DataManager::serializeLocalTree(){
 
 /// @brief Get the data produced by TreePiece::EwaldInit and launch the Ewald kernel on the GPU
 void DataManager::startEwaldGPU() {
+  if (savedNumTotalParticles <= 0 || d_localParts == nullptr || d_localVars == nullptr) {
+    for (int i = 0; i < registeredTreePieces.length(); i++) {
+      int in = registeredTreePieces[i].treePiece->getIndex();
+      treePieces[in].cudaFinishAllBuckets(1);
+    }
+    return;
+  }
+
+  TreePiece *tp = NULL;
+  for (int i = 0; i < registeredTreePieces.length(); i++) {
+    TreePiece *candidate = registeredTreePieces[i].treePiece;
+    if (candidate->root != NULL && candidate->ewt != NULL && candidate->nEwhLoop > 0) {
+      tp = candidate;
+      break;
+    }
+  }
+  if (tp == NULL) {
+    CkAbort("DataManager::startEwaldGPU: no TreePiece with valid Ewald data (root, ewt, nEwhLoop)");
+  }
+
+  int nEwhLoop = tp->nEwhLoop;
+  if (nEwhLoop > NEWH) {
+    CkAbort("DataManager::startEwaldGPU: nEwhLoop (%d) exceeds NEWH (%d); increase NEWH in EwaldCUDA.h",
+            nEwhLoop, NEWH);
+  }
+
 #ifdef PINNED_HOST_MEMORY
   const char* funcTag = "DataManager::startEwaldGPU";
   hostMalloc(&ewt, sizeof(EwtData)*NEWH, funcTag);
@@ -512,11 +538,6 @@ void DataManager::startEwaldGPU() {
   cachedData = (EwaldReadOnlyData *) malloc(sizeof(EwaldReadOnlyData));
 #endif
 
-  // Note that much of this data is calculated per TreePiece. It's all identical,
-  // so we just pull from the first TreePiece
-  TreePiece *tp = registeredTreePieces[0].treePiece;
-
-  int nEwhLoop = tp->nEwhLoop;
   MultipoleMoments *mm = &tp->root->moments;
   for (int i=0; i<nEwhLoop; i++) {
     ewt[i].hx = (cudatype) tp->ewt[i].hx;
