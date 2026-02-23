@@ -5296,7 +5296,16 @@ void TreePiece::startGravity(int am, // the active mask for multistepping
 #endif
   traceUserBracketEvent(START_PW, starttime, CmiWallTimer());
 
-  if (bEwald) thisProxy[thisIndex].EwaldInit();
+  if (bEwald) EwaldInit();  // With the GPU consolidation, we lost the
+                            // interlock that ensured that the
+                            // EwaldInit() entry was called before
+                            // evaluating the Ewald forces.
+                            // So now it needs to be called
+                            // synchronously.
+                            // XXX - this is the same on all
+                            // TreePieces, so it should really be done
+                            // in the DataManager, perhaps at the end
+                            // of the tree build stage.
 #if defined CUDA
   // ask datamanager to serialize local trees
   // prefetch can occur concurrently with this, 
@@ -5304,13 +5313,11 @@ void TreePiece::startGravity(int am, // the active mask for multistepping
   // afterwards.
   if (!bUseCpu) {
       dm->serializeLocalTree();
-  } else {
+  } else
+#endif
+  {
       thisProxy[thisIndex].commenceCalculateGravityLocal();
   }
-#else
-  thisProxy[thisIndex].commenceCalculateGravityLocal();
-#endif
-
 
 #ifdef CHANGA_PRINT_MEMUSAGE
       int piecesPerPe = numTreePieces/CmiNumPes();
