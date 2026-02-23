@@ -6,6 +6,7 @@
 #include "DataManager.h"
 #include "memlog.h"
 #include "ParallelGravity.decl.h"
+#include "formatted_string.h"
 #include <unordered_map>
 #include <vector>
 
@@ -26,12 +27,17 @@
  * excessive memory consumption when multiple ranks share a GPU device.
  */
 void gpuPoolInit() {
+    const int maxCudaDevice = 16;
+    int nCudaDeviceCount = 0;
+    cudaGetDeviceCount(&nCudaDeviceCount);
+    CkAssert(nCudaDeviceCount <= maxCudaDevice);
+
     int dev = 0;
     cudaGetDevice(&dev);
-    
+
     // Use PE-based coordination: only the lowest-numbered PE initializes each device
     // This ensures one initialization per device across all processes on the node
-    static int initializedDevices[16] = {0};
+    static int initializedDevices[maxCudaDevice] = {0};
 
     if (initializedDevices[dev]) {
         return;
@@ -43,11 +49,14 @@ void gpuPoolInit() {
     // Get the CUDA memory pool for this device
     cudaMemPool_t pool = nullptr;
     cudaDeviceGetDefaultMemPool(&pool, dev);
-    
+
     // Set 5GB limit (5 * 1024^3 bytes) to prevent excessive memory usage
     // with multiple ranks per GPU device
     unsigned long long threshold = 5ULL * 1024 * 1024 * 1024;
     cudaError_t setResult = cudaMemPoolSetAttribute(pool, cudaMemPoolAttrReleaseThreshold, &threshold);
+    if (setResult != cudaSuccess) {
+        CkAbort("gpuPoolInit: cudaMemPoolSetAttribute failed: %s", cudaGetErrorString(setResult));
+    }
 
     // Allocation sizes based on typical ChaNGa workload patterns
     // Extended range from 64 KB to 1 GB for comprehensive coverage
@@ -1316,17 +1325,12 @@ void hostPoolReportStats(const char* prefix, double targetCapacityGB) {
         int totalAllocs = g_poolAnalytics.bucketTotalAllocations.count(bucket) ? 
                          g_poolAnalytics.bucketTotalAllocations[bucket] : 0;
         int liveCount = liveCounts.count(bucket) ? liveCounts[bucket] : 0;
-        
+
         // Format bucket size nicely
-        char bucketStr[16];
-        if (bucket < 1024) {
-            snprintf(bucketStr, sizeof(bucketStr), "%zu B", bucket);
-        } else if (bucket < 1024 * 1024) {
-            snprintf(bucketStr, sizeof(bucketStr), "%zu KB", bucket / 1024);
-        } else {
-            snprintf(bucketStr, sizeof(bucketStr), "%zu MB", bucket / (1024 * 1024));
-        }
-        
+        auto bucketStr = (bucket < 1024) ? make_formatted_string("%zu B", bucket)
+            : (bucket < 1024 * 1024) ? make_formatted_string("%zu KB", bucket / 1024)
+            : make_formatted_string("%zu MB", bucket / (1024 * 1024));
+
         // Calculate usage percentage based on current pool state.
         // This avoids negative values when free blocks exceed historical misses
         // (e.g., due to adaptive refills).
@@ -1334,7 +1338,7 @@ void hostPoolReportStats(const char* prefix, double targetCapacityGB) {
         double usagePct = (totalCurrent > 0) ? (100.0 * liveCount / totalCurrent) : 0.0;
         
         CkPrintf("%s   %10s | %6d | %6d | %6d | %10d | %7.1f%%\n", prefix,
-                 bucketStr, freeCount, liveCount, totalMisses, totalAllocs, usagePct);
+                 bucketStr.c_str(), freeCount, liveCount, totalMisses, totalAllocs, usagePct);
     }
     
     CkPrintf("%s   %s\n", prefix, "----------------------------------------------------------------");
