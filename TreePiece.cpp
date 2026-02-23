@@ -6207,6 +6207,14 @@ void TreePiece::receiveNodeCallback(GenericTreeNode *node, int chunk, int reqID,
   compute->nodeRecvdEvent(this,chunk,state,targetBucket);
 }
 
+void TreePiece::receiveNodeCallbackFromRemote(RecvNodeCallbackMsg *msg) {
+  Tree::BinaryTreeNode *node = (Tree::BinaryTreeNode *)(msg->nodeData + PAD_reply);
+  node->unpackNodes();
+  void *source = (void *)bucketList[decodeReqID(msg->reqID)];
+  receiveNodeCallback(node, msg->chunk, msg->reqID, msg->awi, source);
+  CkFreeMsg(msg);
+}
+
 void TreePiece::receiveParticlesCallback(ExternalGravityParticle *egp, int num, int chunk, int reqID, Tree::NodeKey &remoteBucket, int awi, void *source){
   Compute *c;
   State *state;

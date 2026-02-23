@@ -343,6 +343,9 @@ struct BucketMsg : public CkMcastBaseMsg, public CMessage_BucketMsg {
 };
 #endif
 
+/// Message for cross-PE node callback (TreePiece migrated after cache request)
+typedef CMessage_RecvNodeCallbackMsg RecvNodeCallbackMsg;
+
 #ifdef CUDA
 struct fillGPUMsg: public CMessage_fillGPUMsg {
   int partIndex;
@@ -1958,6 +1961,7 @@ public:
 	    }
 
         void receiveNodeCallback(GenericTreeNode *node, int chunk, int reqID, int awi, void *source);
+        void receiveNodeCallbackFromRemote(RecvNodeCallbackMsg *msg);
         void receiveParticlesCallback(ExternalGravityParticle *egp, int num, int chunk, int reqID, Tree::NodeKey &remoteBucket, int awi, void *source);
         void receiveParticlesFullCallback(GravityParticle *egp, int num, int chunk, int reqID, Tree::NodeKey &remoteBucket, int awi, void *source);
 
@@ -1969,12 +1973,12 @@ public:
         void sendRequestForNonLocalMoments(GenericTreeNode *pickedNode);
         void mergeNonLocalRequestsDone();
         //void addTreeBuildMomentsClient(GenericTreeNode *targetNode, TreePiece *client, GenericTreeNode *clientNode);
-        std::map<NodeKey,NonLocalMomentsClientList>::iterator createTreeBuildMomentsEntry(GenericTreeNode *pickedNode);
+        std::map<Tree::NodeKey,NonLocalMomentsClientList>::iterator createTreeBuildMomentsEntry(GenericTreeNode *pickedNode);
 
 
         private:
         // XXX - hashtable instead of map
-        std::map<NodeKey,NonLocalMomentsClientList> nonLocalMomentsClients;
+        std::map<Tree::NodeKey,NonLocalMomentsClientList> nonLocalMomentsClients;
         bool localTreeBuildComplete;
         int getResponsibleIndex(int first, int last);
         
@@ -1983,7 +1987,7 @@ public:
         void accumulateMomentsFromChild(GenericTreeNode *parent, GenericTreeNode *child);
 
         void deliverMomentsToClients(GenericTreeNode *);
-        void deliverMomentsToClients(const std::map<NodeKey,NonLocalMomentsClientList>::iterator &it);
+        void deliverMomentsToClients(const std::map<Tree::NodeKey,NonLocalMomentsClientList>::iterator &it);
         void treeBuildComplete();
         void processRemoteRequestsForMoments();
         void sendParticlesDuringDD(bool withqd);
