@@ -3807,7 +3807,10 @@ void TreePiece::finishBucket(int iBucket) {
 #endif
 
   // XXX finished means Ewald is done.
-  if(req->finished && remaining == 0) {
+  // For numActiveBuckets==0 (all buckets inactive), remote counterArrays never
+  // get decremented (no interaction lists sent), so treat as complete.
+  if((req->finished && remaining == 0) ||
+     (numActiveBuckets == 0)) {
     sLocalGravityState->myNumParticlesPending -= 1;
 
 #ifdef COSMO_PRINT_BK
@@ -3946,6 +3949,19 @@ void TreePiece::cudaFinishAllBuckets(int fromEwald){
     if (fromEwald) bucketReqs[i].finished = 1;
     else state->counterArrays[0][i]--;
     finishBucket(i);
+  }
+  // TPs with no active buckets never send work to PEList, so finishedChunk is
+  // never called via the normal path. Inject chunk completion here.
+  // Skip cache finishedChunk—we never requested any remote particles, so the
+  // cache has no state for us. Only TreePiece::finishedChunk is needed.
+  // markWalkDone() requires completedActiveWalks==2 (bucket work + chunk work).
+  // Inactive TPs never get updateParticles/continueWrapUp, so simulate the
+  // first completion (all buckets done) before the finishedChunk loop.
+  if (numActiveBuckets == 0) {
+    markWalkDone();  // first completion: "bucket work done" (none for inactive)
+    for (int i = 0; i < numChunks; ++i) {
+      finishedChunk(i);
+    }
   }
 }
 
