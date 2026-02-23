@@ -54,8 +54,8 @@ void DataManager::init() {
   d_localVars = nullptr;
   d_remoteMoments = nullptr;
   d_remoteParts = nullptr;
-  bLocalDataTransferred = false;
-  bRemoteDataTransferred = false;
+  bLocalDataTransferred.store(false);
+  bRemoteDataTransferred.store(false);
 #endif
   Cool = CoolInit();
   LWData = LymanWernerTableInit();
@@ -660,7 +660,7 @@ void DataManager::finishLocalWalk() {
 /// in one big kernel launch
 void DataManager::startLocalWalk() {
     delete localTransferCallback;
-    bLocalDataTransferred = true;
+    bLocalDataTransferred.store(true);
 
     // We arent calculating local gravity on the CPU, but bookkeeping
     // still needs to be handled
@@ -722,7 +722,7 @@ void DataManager::resumeRemoteChunk() {
   delete currentChunkBuffers->particles;
   delete currentChunkBuffers->cb;
   delete currentChunkBuffers;
-  bRemoteDataTransferred = true;
+  bRemoteDataTransferred.store(true);
 
   // Check and see if the remote walks already finished and are waiting
   // to launch their GPU kernels
@@ -805,6 +805,7 @@ void DataManager::donePrefetch(int chunk){
 				   (void **)&d_remoteMoments,  (void **)&d_remoteParts,
 				   stream,
 				   remoteChunkTransferCallback);
+    bRemoteDataTransferred.store(true);
   }
   CmiUnlock(__nodelock);
 }
@@ -1278,8 +1279,8 @@ void DataManager::updateParticlesFreeMemory(UpdateParticlesStruct *data)
     gpuPoolFree(d_remoteMoments, stream, funcTag);
     gpuPoolFree(d_remoteParts, stream, funcTag);
 
-    bLocalDataTransferred = false;
-    bRemoteDataTransferred = false;
+    bLocalDataTransferred.store(false);
+    bRemoteDataTransferred.store(false);
     // Set device pointers to nullptr
     d_localMoments = nullptr;
     d_localParts = nullptr;
