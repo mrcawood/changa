@@ -34,8 +34,9 @@ void PEList::finishWalk(TreePiece *treePiece) {
     if (verbosity > 3)
         CkPrintf("[%d] PEList::finishWalk(remote=%d) dataReady=%d, delayed=%d\n",
                  CkMyPe(), bRemote, dataReady, bKernelDelayed);
-    if (!dataReady)
+    if (!dataReady) {
         bKernelDelayed = 1;
+    }
     else
         launchKernel();
 }
@@ -50,8 +51,8 @@ void PEList::tryLaunchDelayedKernel() {
 }
 
 void PEList::finishWalkCb() {
-     dMProxy.ckLocalBranch()->transferParticleVarsBack();
-     reset();
+    dMProxy.ckLocalBranch()->transferParticleVarsBack();
+    reset();
 }
 
 /// @brief Launch the corresponding CUDA kernel, depending what type of request this was

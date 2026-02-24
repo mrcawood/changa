@@ -1678,7 +1678,6 @@ inline int Main::nextMaxRungIncDF(int nextMaxRung)
 inline void Main::waitForGravity(const CkCallback &cb, double startTime,
                                  int activeRung) 
 {
-    CkPrintf("BRK waitForGrav_BEFORE (waiting for 8196 cbG contributions)\n");
     if(param.bConcurrentSph && param.bDoGravity) {
 #ifdef PUSH_GRAVITY
       if(bDoPush){
@@ -1691,7 +1690,6 @@ inline void Main::waitForGravity(const CkCallback &cb, double startTime,
       }
 #endif
     }
-    CkPrintf("BRK waitForGrav_AFTER (reduction complete)\n");
         double tGrav = CkWallTimer()-startTime;
         timings[activeRung].tGrav += tGrav;
         CkPrintf("Calculating gravity and SPH took %g seconds.\n", tGrav);

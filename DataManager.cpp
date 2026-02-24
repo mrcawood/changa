@@ -497,8 +497,6 @@ void DataManager::serializeLocalTree(){
     treePiecesDone = 0;
     CmiUnlock(__nodelock);
 
-    CkPrintf("DM_SLT node %d PE %d serializeLocal starting (%d TPs)\n",
-            CkMyNode(), CkMyPe(), (int)registeredTreePieces.length());
     if(verbosity > 1)
         CkPrintf("[%d] Registered tree pieces length: %lu\n", CkMyPe(), registeredTreePieces.length());
     serializeLocal(root);
@@ -511,7 +509,6 @@ void DataManager::serializeLocalTree(){
 
 /// @brief Get the data produced by TreePiece::EwaldInit and launch the Ewald kernel on the GPU
 void DataManager::startEwaldGPU() {
-  CkPrintf("EW1 [%d] startEwaldGPU entry\n", CkMyPe());
   if (savedNumTotalParticles <= 0 || d_localParts == nullptr || d_localVars == nullptr) {
     for (int i = 0; i < registeredTreePieces.length(); i++) {
       int in = registeredTreePieces[i].treePiece->getIndex();
@@ -531,7 +528,6 @@ void DataManager::startEwaldGPU() {
   if (tp == NULL) {
     CkAbort("DataManager::startEwaldGPU: no TreePiece with valid Ewald data (root, ewt, nEwhLoop)");
   }
-  CkPrintf("EW2 [%d] startEwaldGPU guards passed, tp found\n", CkMyPe());
 
   int nEwhLoop = tp->nEwhLoop;
   if (nEwhLoop > NEWH) {
@@ -547,7 +543,6 @@ void DataManager::startEwaldGPU() {
   ewt = (EwtData *) malloc(sizeof(EwtData)*NEWH);
   cachedData = (EwaldReadOnlyData *) malloc(sizeof(EwaldReadOnlyData));
 #endif
-  CkPrintf("EW3 [%d] startEwaldGPU ewt/cachedData allocated\n", CkMyPe());
 
   MultipoleMoments *mm = &tp->root->moments;
   for (int i=0; i<nEwhLoop; i++) {
@@ -557,7 +552,6 @@ void DataManager::startEwaldGPU() {
     ewt[i].hCfac = (cudatype) tp->ewt[i].hCfac;
     ewt[i].hSfac = (cudatype) tp->ewt[i].hSfac;
     }
-  CkPrintf("EW4 [%d] startEwaldGPU ewt copy done (nEwhLoop=%d)\n", CkMyPe(), nEwhLoop);
 
 #ifdef HEXADECAPOLE
   MOMC *momcRoot = &tp->momcRoot;
@@ -634,7 +628,6 @@ void DataManager::startEwaldGPU() {
   ewaldCallback
     = new CkCallback(CkIndex_DataManager::finishEwaldGPU(), CkMyNode(), dMProxy);
 
-  CkPrintf("EW5 [%d] startEwaldGPU calling DataManagerEwald\n", CkMyPe());
   DataManagerEwald(d_localParts, d_localVars, ewt, cachedData, savedNumTotalParticles-1, stream, ewaldCallback);
 }
 
@@ -665,9 +658,6 @@ void DataManager::finishLocalWalk() {
   delete localWalkCallback;
   delete lwReq;
 
-  CkPrintf("DM_FL node %d PE %d calling cudaFinishAllBuckets for %d TPs\n",
-          CkMyNode(), CkMyPe(), (int)registeredTreePieces.length());
-
 #ifdef GPU_LOCAL_TREE_WALK
 #ifdef PINNED_HOST_MEMORY
   // Direct free for large local tree buffers (bypasses pool but logs analytics)
@@ -696,7 +686,6 @@ void DataManager::finishLocalWalk() {
 /// Indicate the transfer is done, and start the local gravity walk
 /// in one big kernel launch
 void DataManager::startLocalWalk() {
-    CkPrintf("DM_SLW node %d PE %d transfer done, launching local walk\n", CmiMyNode(), CkMyPe());
     delete localTransferCallback;
     bLocalDataTransferred.store(true);
 
@@ -1126,8 +1115,6 @@ void DataManager::transferLocalToGPU(int numParticles)
     if(treePiecesBufferFilled == registeredTreePieces.length()){
         treePiecesBufferFilled = 0;
         CmiUnlock(__nodelock);
-        CkPrintf("DM_TLG node %d PE %d all %d TPs filled, starting transfer\n",
-                CkMyNode(), CkMyPe(), (int)registeredTreePieces.length());
     }
     else {
         CmiUnlock(__nodelock);
@@ -1248,7 +1235,6 @@ void DataManager::transferParticleVarsBack(){
     data->buf = buf;
     data->size = savedNumTotalParticles;
 
-    CkPrintf("TB [%d] node %d transferParticleVarsBack\n", CkMyPe(), CmiMyNode());
     TransferParticleVarsBack(buf, 
                              savedNumTotalParticles*sizeof(VariablePartData),
 			     d_localVars,
@@ -1288,22 +1274,29 @@ void DataManager::updateParticles(UpdateParticlesStruct *data){
 
 void updateParticlesCallback(void *param, void *msg){  
   UpdateParticlesStruct *data = (UpdateParticlesStruct *)param;
-  CkPrintf("TB [%d] node %d updateParticlesCallback\n", CkMyPe(), CmiMyNode());
   data->dm->updateParticles(data);
 }
 
 /// @brief clean up buffer for GPU transfer back.
+/// Minimize critical section: only hold __nodelock for counter update.
+/// Expensive cleanup (gpuFree, hostFree, cudaDeviceSynchronize) runs outside
+/// the lock to avoid lock-ordering/deadlock issues when multiple PEs contend.
 void DataManager::updateParticlesFreeMemory(UpdateParticlesStruct *data)
 {
-    CmiLock(__nodelock);
-    treePiecesParticlesUpdated++;
-    int total = (int)registeredTreePieces.length();
-    if(total > 50 && treePiecesParticlesUpdated >= total - 50 && treePiecesParticlesUpdated <= total)
-        CkPrintf("TB [%d] node %d updateParticlesFreeMemory %d/%d\n", CkMyPe(), CmiMyNode(), treePiecesParticlesUpdated, total);
-    if(treePiecesParticlesUpdated == total){
-        CkPrintf("TB [%d] node %d all TPs in, cleanup\n", CkMyPe(), CmiMyNode());
-        treePiecesParticlesUpdated = 0;
+    bool doCleanup = false;
+    {
+        CmiLock(__nodelock);
+        treePiecesParticlesUpdated++;
+        int total = (int)registeredTreePieces.length();
+        if(treePiecesParticlesUpdated == total){
+            treePiecesParticlesUpdated = 0;
+            doCleanup = true;
+        }
+        CmiUnlock(__nodelock);
+    }
+    if (!doCleanup) return;
 
+    // Cleanup outside lock: only one PE reaches here; no contention.
     // Free host buffers for remote chunk data
 #ifdef PINNED_HOST_MEMORY
     const char* funcTagHost = "DataManager::updateParticlesFreeMemory";
@@ -1335,21 +1328,17 @@ void DataManager::updateParticlesFreeMemory(UpdateParticlesStruct *data)
     d_remoteMoments = nullptr;
     d_remoteParts = nullptr;
 
-        if(data->size > 0){
+    if(data->size > 0){
 #ifdef PINNED_HOST_MEMORY
-            const char* funcTag = "DataManager::updateParticlesFreeMemory";
-            hostFree(data->buf, funcTag);
+        const char* funcTagBuf = "DataManager::updateParticlesFreeMemory";
+        hostFree(data->buf, funcTagBuf);
 #else
-            free(data->buf);
+        free(data->buf);
 #endif
-        }
-        delete (data->cb);
-        delete data;
-        cudaDeviceSynchronize();
-        CkPrintf("TB [%d] node %d cleanup done\n", CkMyPe(), CmiMyNode());
-
     }
-    CmiUnlock(__nodelock);
+    delete (data->cb);
+    delete data;
+    cudaDeviceSynchronize();
 }
 
 // After after each BigStep, trims the host pool to reclaim memory
