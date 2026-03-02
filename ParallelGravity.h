@@ -343,9 +343,6 @@ struct BucketMsg : public CkMcastBaseMsg, public CMessage_BucketMsg {
 };
 #endif
 
-/// Message for cross-PE node callback (TreePiece migrated after cache request)
-typedef CMessage_RecvNodeCallbackMsg RecvNodeCallbackMsg;
-
 #ifdef CUDA
 struct fillGPUMsg: public CMessage_fillGPUMsg {
   int partIndex;
@@ -1961,7 +1958,6 @@ public:
 	    }
 
         void receiveNodeCallback(GenericTreeNode *node, int chunk, int reqID, int awi, void *source);
-        void receiveNodeCallbackFromRemote(RecvNodeCallbackMsg *msg);
         void receiveParticlesCallback(ExternalGravityParticle *egp, int num, int chunk, int reqID, Tree::NodeKey &remoteBucket, int awi, void *source);
         void receiveParticlesFullCallback(GravityParticle *egp, int num, int chunk, int reqID, Tree::NodeKey &remoteBucket, int awi, void *source);
 

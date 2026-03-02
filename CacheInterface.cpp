@@ -443,21 +443,7 @@ void EntryTypeGravityNode::callback(CkArrayID requestorID, CkArrayIndexMax &requ
   int reqID = (int)(userData.d0 & 0xFFFFFFFF);
   int awi = userData.d0 >> 32;
 
-  if (requestorPe != CkMyPe()) {
-    // Cross-PE: requestor migrated since request. Serialize node and send.
-    Tree::BinaryTreeNode *node = (Tree::BinaryTreeNode *)data;
-    int count = node->countDepth(_cacheLineDepth);
-    size_t nodeDataSize = PAD_reply + count * ALIGN_DEFAULT(sizeof(Tree::BinaryTreeNode) + PAD_reply);
-    RecvNodeCallbackMsg *fwd = new (nodeDataSize) RecvNodeCallbackMsg();
-    fwd->chunk = chunk;
-    fwd->reqID = reqID;
-    fwd->awi = awi;
-    fwd->key = key;
-    Tree::BinaryTreeNode *dst = (Tree::BinaryTreeNode *)(fwd->nodeData + PAD_reply);
-    node->packNodes(dst, _cacheLineDepth, PAD_reply);
-    treeProxy[requestorIdx.data()[0]].receiveNodeCallbackFromRemote(fwd);
-    return;
-  }
+  CkAssert(requestorPe == CkMyPe() && "Node cache callback should never target TreePiece on different PE");
   CProxyElement_TreePiece elem(requestorID, idx);
   void *source = (void *)userData.d1;
   elem.receiveNodeCallback((Tree::GenericTreeNode*)data, chunk, reqID, awi, source);
