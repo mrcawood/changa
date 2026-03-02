@@ -28,10 +28,13 @@ void PEList::finishWalk(TreePiece *treePiece) {
 
     // If the DataManager device pointer is NULL, the GPU data transfer is
     // still in progress and we need to delay the kernel launch
-    if ((!bRemote && !dMProxy.ckLocalBranch()->bLocalDataTransferred) ||
-        (bRemote && !dMProxy.ckLocalBranch()->bRemoteDataTransferred))
+    bool dataReady = (!bRemote &&
+        dMProxy.ckLocalBranch()->bLocalDataTransferred.load()) ||
+        (bRemote && dMProxy.ckLocalBranch()->bRemoteDataTransferred.load());
+    if (!dataReady)
         bKernelDelayed = 1;
-    else launchKernel();
+    else
+        launchKernel();
 }
 
 /// @brief Called from DataManager after remote transfer finishes. Launch our kernel if it was delayed
@@ -54,10 +57,11 @@ void PEList::launchKernel() {
     CkAssert(dMProxy.ckLocalBranch()->d_localMoments != nullptr);
     CkAssert(dMProxy.ckLocalBranch()->d_localParts != nullptr);
     CkAssert(dMProxy.ckLocalBranch()->d_localVars != nullptr);
-    if (bRemote) {
-        CkAssert(dMProxy.ckLocalBranch()->d_remoteParts != nullptr);
-        CkAssert(dMProxy.ckLocalBranch()->d_remoteMoments != nullptr);
-    }
+    // The following checks can fail if remote prefetch does not bring in any data.
+    // if (bRemote) {
+    //    CkAssert(dMProxy.ckLocalBranch()->d_remoteParts != nullptr);
+    //    CkAssert(dMProxy.ckLocalBranch()->d_remoteMoments != nullptr);
+    // }
 
     request->d_localMoments = dMProxy.ckLocalBranch()->d_localMoments;
     request->d_localParts = dMProxy.ckLocalBranch()->d_localParts;
