@@ -310,10 +310,7 @@ void GravityCompute::recvdParticles(ExternalGravityParticle *part,int num,int ch
 #ifdef BENCHMARK_TIME_COMPUTE
   computeTimePart += CmiWallTimer() - startTime;
 #endif
-  if (tp->particleInterRemote == NULL) {
-    CkPrintf("ERROR [%d] TP %d particleInterRemote NULL at chunk %d (GravityCompute::recvdParticles)\n", CkMyPe(), tp->getIndex(), chunk);
-    CkAbort("particleInterRemote NULL");
-  }
+  CkAssert(tp->particleInterRemote != NULL);
   tp->particleInterRemote[chunk] += computed * num;
   tp->finishBucket(reqIDlist);
   CkAssert(state->counterArrays[1][chunk] >= 0);
@@ -349,10 +346,7 @@ void GravityCompute::nodeRecvdEvent(TreePiece *owner, int chunk, State *state, i
   state->counterArrays[1][chunk] --;
   CkAssert(state->counterArrays[1][chunk] >= 0);
   if (state->counterArrays[1][chunk] == 0) {
-    if (owner->particleInterRemote == NULL) {
-      CkPrintf("ERROR [%d] TP %d particleInterRemote NULL at chunk %d (GravityCompute::nodeRecvdEvent)\n", CkMyPe(), owner->getIndex(), chunk);
-      CkAbort("particleInterRemote NULL");
-    }
+    CkAssert(owner->particleInterRemote != NULL);
     cacheGravPart[CkMyPe()].finishedChunk(chunk, owner->particleInterRemote[chunk]);
 #ifdef CHECK_WALK_COMPLETIONS
     CkPrintf("[%d] finishedChunk %d GravityCompute::nodeRecvdEvent\n", owner->getIndex(), chunk);

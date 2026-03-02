@@ -5026,10 +5026,10 @@ void TreePiece::startGravity(int am, // the active mask for multistepping
   if (numChunks == 0 && myNumParticles == 0) numChunks = 1;
   int dummy;
 
-  // Allocate particleInterRemote/nodeInterRemote early so they are valid if
-  // callbacks arrive (e.g. after migration or from stale cache). PUP sets
-  // these to NULL on unpack; allocation must happen before any cache/Compute
-  // path can touch them.
+  // Allocate particleInterRemote/nodeInterRemote before PEList::finishWalk()
+  // is invoked (e.g. in the myNumParticles==0 path via finishedTPWork).
+  // They must be valid if any callback arrives. PUP sets them to NULL on
+  // unpack; allocation must happen before any cache/Compute path can touch them.
   if (oldNumChunks != numChunks) {
     delete[] nodeInterRemote;
     delete[] particleInterRemote;
