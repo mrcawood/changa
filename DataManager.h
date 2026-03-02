@@ -9,6 +9,7 @@
 
 #include <vector>
 #include <map>
+#include <atomic>
 #include <string>
 #include "GenericTreeNode.h"
 #include "ParallelGravity.decl.h"
@@ -94,9 +95,9 @@ protected:
         int treePiecesDonePrefetch;
 public:
         /// Indicates that the local Tree data is on the GPU
-        bool bLocalDataTransferred;
+        std::atomic<bool> bLocalDataTransferred;
         /// Indicates that the remote Tree data is on the GPU
-        bool bRemoteDataTransferred;
+        std::atomic<bool> bRemoteDataTransferred;
 protected:
         /// Counter for PEs that are ready to get their acclerations updated.
         int PEsWantParticlesBack;
@@ -387,24 +388,11 @@ class ProjectionsControl : public CBase_ProjectionsControl {
 #ifdef CUDA
     // GPUs are assigned to nodes in a round-robin fashion. This allows the user to define
     // one virtual node per device and utilize multiple GPUs on a single node
-    // Beacuse devices are assigned per-PE, this is a convenient place to call setDevice
-    // Note that this code has nothing to do with initalizing projections
+    // Because devices are assigned per-PE, this is a convenient place to call setDevice
+    // Note that this code has nothing to do with initializing projections
     int numGpus;
     cudaGetDeviceCount(&numGpus);
     cudaSetDevice(CmiMyNode() % numGpus);
-    
-    // Initialize GPU & host memory pools with warmup for typical allocation patterns
-    // Only initialize once per node (first PE on each node)
-    static CmiNodeLock initLock = CmiCreateLock();
-    static bool poolsInitialized = false;
-    
-    CmiLock(initLock);
-    if (!poolsInitialized) {
-        gpuPoolInit();       // Device pool warmup
-        hostPoolInit();   // Host pool warmup
-        poolsInitialized = true;
-    }
-    CmiUnlock(initLock);
 #endif
     setBIconfig();
     LBTurnCommOff();
