@@ -503,9 +503,13 @@ void DataManager::serializeLocalTree(){
 
 /// @brief Get the data produced by TreePiece::EwaldInit and launch the Ewald kernel on the GPU
 void DataManager::startEwaldGPU() {
-  // Skip GPU Ewald setup when there are no particles or GPU buffers were never
-  // allocated (e.g. no-local-parts run). Still must call cudaFinishAllBuckets
-  // so TreePieces can complete their finishBucket/remote-counter logic.
+  // Early exit when no Ewald work to do: no particles on this node, or GPU
+  // buffers were never allocated (e.g. no-local-parts run).
+  //
+  // We must still call cudaFinishAllBuckets(1) here. Normally that happens in
+  // finishEwaldGPU() (the callback passed to DataManagerEwald). When we skip
+  // the kernel, finishEwaldGPU never runs, so we replicate its behavior here
+  // to avoid deadlock: TPs are waiting for their buckets to be marked finished.
   if (savedNumTotalParticles <= 0 || d_localParts == nullptr || d_localVars == nullptr) {
     for (int i = 0; i < registeredTreePieces.length(); i++) {
       int in = registeredTreePieces[i].treePiece->getIndex();
@@ -514,9 +518,8 @@ void DataManager::startEwaldGPU() {
     return;
   }
 
-  // Find a TreePiece that ran EwaldInit and has valid Ewald data. Not all TPs
-  // may have it (e.g. empty TPs, or TPs that skipped Ewald). We need one with
-  // root, ewt, and nEwhLoop > 0 to copy data to GPU.
+  // Find a TreePiece with valid Ewald data (root, ewt, nEwhLoop from
+  // EwaldInit). registeredTreePieces[0] may be empty or lack Ewald data.
   TreePiece *tp = NULL;
   for (int i = 0; i < registeredTreePieces.length(); i++) {
     TreePiece *candidate = registeredTreePieces[i].treePiece;
