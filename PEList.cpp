@@ -31,12 +31,8 @@ void PEList::finishWalk(TreePiece *treePiece) {
     bool dataReady = (!bRemote &&
         dMProxy.ckLocalBranch()->bLocalDataTransferred.load()) ||
         (bRemote && dMProxy.ckLocalBranch()->bRemoteDataTransferred.load());
-    if (verbosity > 3)
-        CkPrintf("[%d] PEList::finishWalk(remote=%d) dataReady=%d, delayed=%d\n",
-                 CkMyPe(), bRemote, dataReady, bKernelDelayed);
-    if (!dataReady) {
+    if (!dataReady)
         bKernelDelayed = 1;
-    }
     else
         launchKernel();
 }

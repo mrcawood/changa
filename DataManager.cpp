@@ -750,8 +750,6 @@ void DataManager::resumeRemoteChunk() {
   delete currentChunkBuffers->cb;
   delete currentChunkBuffers;
   bRemoteDataTransferred.store(true);
-  if (verbosity > 3)
-    CkPrintf("[%d] resumeRemoteChunk: bRemoteDataTransferred set true (chunk %d)\n", CkMyPe(), savedChunk);
 
   // Check and see if the remote walks already finished and are waiting
   // to launch their GPU kernels
