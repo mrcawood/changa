@@ -19,6 +19,22 @@
 #include "Compute.h"
 #include "TreeWalk.h"
 
+#ifdef TESTSTEP_PELIST_RETRY_DIAG
+#define TESTSTEP_RETRY_PRINT(...) CkPrintf("TESTSTEP_PELIST_RETRY_DIAG " __VA_ARGS__)
+#else
+#define TESTSTEP_RETRY_PRINT(...)
+#endif
+
+#ifdef TESTSTEP_LOCALWALK_CHAIN_DIAG
+#define TESTSTEP_LOCALWALK_PRINT(...) CmiError("TESTSTEP_LOCALWALK_CHAIN " __VA_ARGS__)
+#else
+#define TESTSTEP_LOCALWALK_PRINT(...)
+#endif
+
+#if defined(CUDA) && defined(TESTSTEP_GPU_PROGRESS_DIAG)
+#include "teststep_gpu_progress.h"
+#endif
+
 void printTreeGraphViz(GenericTreeNode *node, ostream &out, const string &name);
 
 DataManager::DataManager(const CkArrayID& treePieceID) {
@@ -644,6 +660,9 @@ void DataManager::startEwaldGPU() {
 
 /// @brief Callback from Ewald kernel launch on GPU
 void DataManager::finishEwaldGPU() {
+#if defined(TESTSTEP_GPU_PROGRESS_DIAG)
+  gpu_prog_cb_fired(GP_EWALD);
+#endif
   delete ewaldCallback;
 
 #ifdef PINNED_HOST_MEMORY
@@ -668,6 +687,14 @@ void DataManager::finishEwaldGPU() {
 /// Call finishBucket for all buckets and TreePieces
 /// Start Ewald calculation if enabled
 void DataManager::finishLocalWalk() {
+  TESTSTEP_LOCALWALK_PRINT(
+      "ev=finishLocalWalk_enter pe=%d node=%d dm=%p localCb=%p lwReq=%p localReady=%d remoteReady=%d tpCount=%d\n",
+      CkMyPe(), CkMyNode(), (void *)this, (void *)localWalkCallback, (void *)lwReq,
+      (int)bLocalDataTransferred.load(), (int)bRemoteDataTransferred.load(),
+      (int)registeredTreePieces.length());
+#if defined(TESTSTEP_GPU_PROGRESS_DIAG)
+  gpu_prog_cb_fired(GP_DM_LOCAL_TREE);
+#endif
   delete localWalkCallback;
   delete lwReq;
 
@@ -675,14 +702,25 @@ void DataManager::finishLocalWalk() {
 #ifdef PINNED_HOST_MEMORY
   // Direct free for large local tree buffers (bypasses pool but logs analytics)
   const char* funcTag = "DataManager::finishLocalWalk";
+  TESTSTEP_LOCALWALK_PRINT(
+      "ev=dm_localBuffers_clear pe=%d node=%d dm=%p localMoments=%p localParts=%p localVars=%p reason=finishLocalWalk\n",
+      CkMyPe(), CkMyNode(), (void *)this, (void *)bufLocalMoments, (void *)bufLocalParts,
+      (void *)bufLocalVars);
   hostFree(bufLocalMoments, funcTag);
   hostFree(bufLocalParts, funcTag);
   hostFree(bufLocalVars, funcTag);
 #else
+  TESTSTEP_LOCALWALK_PRINT(
+      "ev=dm_localBuffers_clear pe=%d node=%d dm=%p localMoments=%p localParts=%p localVars=%p reason=finishLocalWalk\n",
+      CkMyPe(), CkMyNode(), (void *)this, (void *)bufLocalMoments, (void *)bufLocalParts,
+      (void *)bufLocalVars);
   free(bufLocalMoments);
   free(bufLocalParts);
   free(bufLocalVars);
 #endif
+  bufLocalMoments = nullptr;
+  bufLocalParts = nullptr;
+  bufLocalVars = nullptr;
 
   for(int i = 0; i < registeredTreePieces.length(); i++){
       if(registeredTreePieces[i].treePiece->getNumActiveParticles() > 0) {
@@ -701,8 +739,19 @@ void DataManager::finishLocalWalk() {
 /// Indicate the transfer is done, and start the local gravity walk
 /// in one big kernel launch
 void DataManager::startLocalWalk() {
+    TESTSTEP_LOCALWALK_PRINT(
+        "ev=startLocalWalk_enter pe=%d node=%d dm=%p localCb=%p localWalkCb=%p localReady=%d remoteReady=%d tpCount=%d\n",
+        CkMyPe(), CkMyNode(), (void *)this, (void *)localTransferCallback, (void *)localWalkCallback,
+        (int)bLocalDataTransferred.load(), (int)bRemoteDataTransferred.load(),
+        (int)registeredTreePieces.length());
+#if defined(TESTSTEP_GPU_PROGRESS_DIAG)
+    gpu_prog_cb_fired(GP_DM_LOCAL_XFER);
+#endif
     delete localTransferCallback;
     bLocalDataTransferred.store(true);
+    TESTSTEP_RETRY_PRINT(
+        "trigger startLocalWalk node=%d pe=%d localReady=%d remoteReady=%d action=dispatchTryLaunch\n",
+        CkMyNode(), CkMyPe(), bLocalDataTransferred.load(), bRemoteDataTransferred.load());
 
     // Delayed local kernels can now launch (remote may have completed first).
     int pe;
@@ -728,6 +777,10 @@ void DataManager::startLocalWalk() {
 #ifdef GPU_LOCAL_TREE_WALK
     localWalkCallback
       = new CkCallback(CkIndex_DataManager::finishLocalWalk(), CkMyNode(), dMProxy);
+    TESTSTEP_LOCALWALK_PRINT(
+        "ev=startLocalWalk_registerCb pe=%d node=%d dm=%p localWalkCb=%p cbTargetNode=%d localReady=%d remoteReady=%d\n",
+        CkMyPe(), CkMyNode(), (void *)this, (void *)localWalkCallback, CkMyNode(),
+        (int)bLocalDataTransferred.load(), (int)bRemoteDataTransferred.load());
 
     lwReq = new CudaRequest;
 
@@ -762,9 +815,23 @@ void DataManager::startLocalWalk() {
     lwReq->bucketStarts = NULL;
     lwReq->bucketSizes = NULL;
     lwReq->numInteractions = 0;
+    TESTSTEP_LOCALWALK_PRINT(
+        "ev=startLocalWalk_launchLocalKernel pe=%d node=%d dm=%p lwReq=%p cb=%p localReady=%d remoteReady=%d\n",
+        CkMyPe(), CkMyNode(), (void *)this, (void *)lwReq, (void *)lwReq->cb,
+        (int)bLocalDataTransferred.load(), (int)bRemoteDataTransferred.load());
 
+#if defined(TESTSTEP_GPU_PROGRESS_DIAG)
+    gpu_prog_try_snapshot_post_local_xfer();
+#endif
     DataManagerLocalTreeWalk(lwReq);
 #else
+    TESTSTEP_LOCALWALK_PRINT(
+        "ev=startLocalWalk_noGpuLocal pe=%d node=%d dm=%p action=direct_finishLocalWalk localReady=%d remoteReady=%d\n",
+        CkMyPe(), CkMyNode(), (void *)this, (int)bLocalDataTransferred.load(),
+        (int)bRemoteDataTransferred.load());
+#if defined(TESTSTEP_GPU_PROGRESS_DIAG)
+    gpu_prog_try_snapshot_post_local_xfer();
+#endif
     finishLocalWalk();
 #endif
 }
@@ -773,12 +840,18 @@ void DataManager::startLocalWalk() {
 /// The data for remote interactions is on the GPU, so continue the
 /// remote walk.
 void DataManager::resumeRemoteChunk() {
+#if defined(TESTSTEP_GPU_PROGRESS_DIAG)
+  gpu_prog_cb_fired(GP_DM_REMOTE_XFER);
+#endif
   if(verbosity > 1) CkPrintf("[%d] resumeRemoteChunk registered: %lu\n", CkMyPe(), registeredTreePieces.length());
   delete currentChunkBuffers->moments;
   delete currentChunkBuffers->particles;
   delete currentChunkBuffers->cb;
   delete currentChunkBuffers;
   bRemoteDataTransferred.store(true);
+  TESTSTEP_RETRY_PRINT(
+      "trigger resumeRemoteChunk node=%d pe=%d localReady=%d remoteReady=%d action=dispatchTryLaunch\n",
+      CkMyNode(), CkMyPe(), bLocalDataTransferred.load(), bRemoteDataTransferred.load());
 
   // Check and see if the remote walks already finished and are waiting
   // to launch their GPU kernels
@@ -1118,6 +1191,10 @@ void DataManager::serializeLocal(GenericTreeNode *nodeRoot){
   bufLocalParts = (CompactPartData *) malloc(sLocalParts);
   bufLocalMoments = (CudaMultipoleMoments *) malloc(sLocalMoments);
 #endif
+  TESTSTEP_LOCALWALK_PRINT(
+      "ev=dm_localBuffers_alloc pe=%d node=%d dm=%p localParts=%p localMoments=%p sLocalParts=%zu sLocalMoments=%zu\n",
+      CkMyPe(), CkMyNode(), (void *)this, (void *)bufLocalParts, (void *)bufLocalMoments,
+      (size_t)sLocalParts, (size_t)sLocalMoments);
 
   int pTPindex = 0;
   treePiecesBufferFilled = 0;
@@ -1127,10 +1204,17 @@ void DataManager::serializeLocal(GenericTreeNode *nodeRoot){
       fillGPUMsg *msg = new (8*sizeof(int)) fillGPUMsg;
       msg->partIndex = pTPindex;
       msg->nParts = numParticles;
+      TreePiece *tp = registeredTreePieces[i].treePiece;
+      const int tpIndex = tp->getIndex();
+      const int tpParts = tp->getDMNumParticles();
+      TESTSTEP_LOCALWALK_PRINT(
+          "ev=dm_dispatchFillGPU pe=%d node=%d dm=%p tp=%d ord=%d partIndex=%d tpParts=%d nParts=%d end=%d\n",
+          CkMyPe(), CkMyNode(), (void *)this, tpIndex, i, msg->partIndex, tpParts,
+          msg->nParts, msg->partIndex + tpParts);
       *((int *)CkPriorityPtr(msg)) = -100000000 - i;
       CkSetQueueing(msg,CK_QUEUEING_IFIFO);
-      treePieces[registeredTreePieces[i].treePiece->getIndex()].fillGPUBuffer(msg);
-      pTPindex += registeredTreePieces[i].treePiece->getDMNumParticles();
+      treePieces[tpIndex].fillGPUBuffer(msg);
+      pTPindex += tpParts;
       }
 }
 
@@ -1180,6 +1264,10 @@ void DataManager::transferLocalToGPU(int numParticles)
 #else
   bufLocalVars = (VariablePartData *) malloc(sLocalVars);
 #endif
+  TESTSTEP_LOCALWALK_PRINT(
+      "ev=dm_localBuffers_publish pe=%d node=%d dm=%p localParts=%p localMoments=%p localVars=%p nParts=%d sLocalVars=%zu\n",
+      CkMyPe(), CkMyNode(), (void *)this, (void *)bufLocalParts, (void *)bufLocalMoments,
+      (void *)bufLocalVars, numParticles, (size_t)sLocalVars);
 
   // Transfer moments and particle cores to gpu
   DataManagerTransferLocalTree(bufLocalMoments, sLocalMoments, bufLocalParts,
@@ -1304,6 +1392,9 @@ void DataManager::updateParticles(UpdateParticlesStruct *data){
 }
 
 void updateParticlesCallback(void *param, void *msg){  
+#if defined(TESTSTEP_GPU_PROGRESS_DIAG)
+  gpu_prog_cb_fired(GP_PARTVAR_BACK);
+#endif
   UpdateParticlesStruct *data = (UpdateParticlesStruct *)param;
   data->dm->updateParticles(data);
 }
@@ -1374,6 +1465,5 @@ void DataManager::refillHostPool(const CkCallback& cb){
   hostPoolAdaptiveRefill();
   contribute(cb);
 }
-
 
 #endif // CUDA

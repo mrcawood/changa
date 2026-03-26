@@ -51,6 +51,9 @@
 
 #ifdef CUDA
 #include "PEList.h"
+#if defined(TESTSTEP_GPU_PROGRESS_DIAG)
+#include "teststep_gpu_progress.h"
+#endif
 // for default per-list parameters
 #include "cuda_typedef.h"
 #include "MemoryPool.h"
@@ -3078,6 +3081,10 @@ Main::initialForces()
   
   CkCallback cbGravity(CkCallback::resumeThread);  // needed below to wait for gravity
 
+#if defined(CUDA) && defined(TESTSTEP_GPU_PROGRESS_DIAG)
+  /* Distinct from doSimulation big steps (>= iStartStep+1) so first_gravity snapshots fire. */
+  gpu_prog_set_big_step(-1);
+#endif
   double gravStartTime;
   startGravity(cbGravity, 0, &gravStartTime);
   if(param.bDoExternalForce)
@@ -3159,6 +3166,11 @@ Main::doSimulation()
 #endif
 
   for(int iStep = param.iStartStep+1; iStep <= param.nSteps; iStep++){
+#ifdef CUDA
+#if defined(TESTSTEP_GPU_PROGRESS_DIAG)
+    gpu_prog_set_big_step(iStep);
+#endif
+#endif
     if (killAt > 0 && killAt == iStep) {
       ckout << "KillAT: Stopping after " << (CkWallTimer()-dSimStartTime) << " seconds\n";
       break;
@@ -3184,7 +3196,6 @@ Main::doSimulation()
     writeTimings(iStep);
 
 #ifdef CUDA
-    
     // Host pool diagnostics and maintenance
     if (param.bHostPoolDebug) {
         char prefix[64];

@@ -46,6 +46,15 @@
 
 #ifdef CUDA
 #include "PEList.h"
+#if defined(TESTSTEP_GPU_PROGRESS_DIAG)
+#include "teststep_gpu_progress.h"
+#endif
+#endif
+
+#ifdef TESTSTEP_LOCALWALK_CHAIN_DIAG
+#define TESTSTEP_LOCALWALK_PRINT(...) CmiError("TESTSTEP_LOCALWALK_CHAIN " __VA_ARGS__)
+#else
+#define TESTSTEP_LOCALWALK_PRINT(...)
 #endif
 
 using namespace std;
@@ -3845,17 +3854,63 @@ void TreePiece::finishBucket(int iBucket) {
 /// @param msg A struct containing info on where to write in the shared buffer
 void TreePiece::fillGPUBuffer(fillGPUMsg *msg)
 {
+    if (msg == NULL) {
+      TESTSTEP_LOCALWALK_PRINT(
+          "ev=tp_fillGPUBuffer_bad_state pe=%d node=%d tp=%d iter=%d rung=%d reason=null_msg\n",
+          CkMyPe(), CkMyNode(), thisIndex, iterationNo, activeRung);
+      CkAbort("fillGPUBuffer: msg is null");
+    }
     int partIndex = msg->partIndex;
     int nParts = msg->nParts;
+    const int tpParts = getDMNumParticles();
+    const int rangeEnd = partIndex + tpParts;
+
+    TESTSTEP_LOCALWALK_PRINT(
+        "ev=tp_fillGPUBuffer_enter pe=%d node=%d tp=%d iter=%d rung=%d msg=%p dm=%p partIndex=%d tpParts=%d nParts=%d end=%d numBuckets=%d savedTotalParts=%d savedTotalNodes=%d\n",
+        CkMyPe(), CkMyNode(), thisIndex, iterationNo, activeRung, (void *)msg,
+        (void *)dm, partIndex, tpParts, nParts, rangeEnd, numBuckets,
+        dm != NULL ? dm->savedNumTotalParticles : -1,
+        dm != NULL ? dm->savedNumTotalNodes : -1);
+
+    if (dm == NULL || partIndex < 0 || tpParts < 0 || nParts < 0 || partIndex > nParts ||
+        rangeEnd < partIndex || rangeEnd > nParts ||
+        (dm != NULL && nParts != dm->savedNumTotalParticles)) {
+      TESTSTEP_LOCALWALK_PRINT(
+          "ev=tp_fillGPUBuffer_bad_state pe=%d node=%d tp=%d reason=bad_entry dm=%p partIndex=%d tpParts=%d nParts=%d end=%d savedTotalParts=%d\n",
+          CkMyPe(), CkMyNode(), thisIndex, (void *)dm, partIndex, tpParts, nParts,
+          rangeEnd, dm != NULL ? dm->savedNumTotalParticles : -1);
+      CkAbort("fillGPUBuffer: invalid entry state");
+    }
 
     CompactPartData *aLocalParts = dm->getBufLocalParts();
     CudaMultipoleMoments *aLocalMoments = dm->getLocalMoments();
+    if (aLocalParts == NULL || aLocalMoments == NULL) {
+      TESTSTEP_LOCALWALK_PRINT(
+          "ev=tp_fillGPUBuffer_bad_state pe=%d node=%d tp=%d reason=null_dm_buffers localParts=%p localMoments=%p\n",
+          CkMyPe(), CkMyNode(), thisIndex, (void *)aLocalParts, (void *)aLocalMoments);
+      CkAbort("fillGPUBuffer: null DataManager local buffers");
+    }
     getDMParticles(aLocalParts, partIndex);
+    TESTSTEP_LOCALWALK_PRINT(
+        "ev=tp_fillGPUBuffer_afterCopy pe=%d node=%d tp=%d partIndex_after=%d expected_end=%d\n",
+        CkMyPe(), CkMyNode(), thisIndex, partIndex, rangeEnd);
 #ifdef GPU_LOCAL_TREE_WALK
     // set the bucketStart and bucketSize for each bucket Node
     for (int j = 0; j < numBuckets; ++j) {
 	GenericTreeNode *bucketNode = bucketList[j];
+        if (bucketNode == NULL) {
+          TESTSTEP_LOCALWALK_PRINT(
+              "ev=tp_fillGPUBuffer_bad_state pe=%d node=%d tp=%d reason=null_bucket j=%d\n",
+              CkMyPe(), CkMyNode(), thisIndex, j);
+          CkAbort("fillGPUBuffer: null bucket node");
+        }
 	int id = bucketNode->nodeArrayIndex;
+        if (id < 0 || id >= dm->savedNumTotalNodes) {
+          TESTSTEP_LOCALWALK_PRINT(
+              "ev=tp_fillGPUBuffer_bad_state pe=%d node=%d tp=%d reason=bad_node_index j=%d nodeId=%d savedTotalNodes=%d\n",
+              CkMyPe(), CkMyNode(), thisIndex, j, id, dm->savedNumTotalNodes);
+          CkAbort("fillGPUBuffer: bucket node index out of bounds");
+        }
 	aLocalMoments[id].bucketStart = bucketNode->bucketArrayIndex;
 	aLocalMoments[id].bucketSize = bucketNode->lastParticle
 	    - bucketNode->firstParticle + 1;
@@ -3866,11 +3921,20 @@ void TreePiece::fillGPUBuffer(fillGPUMsg *msg)
       int id = bucketNode->nodeArrayIndex;
       int start = aLocalMoments[id].bucketStart;
       int end = start + aLocalMoments[id].bucketSize;
+      if (start < 0 || end < start || end > nParts) {
+        TESTSTEP_LOCALWALK_PRINT(
+            "ev=tp_fillGPUBuffer_bad_state pe=%d node=%d tp=%d reason=bad_bucket_range j=%d nodeId=%d start=%d end=%d nParts=%d\n",
+            CkMyPe(), CkMyNode(), thisIndex, j, id, start, end, nParts);
+        CkAbort("fillGPUBuffer: bucket particle range out of bounds");
+      }
       for (int k = start; k < end; k ++) {
         aLocalParts[k].nodeId = id;
       }
     }
 #endif
+    TESTSTEP_LOCALWALK_PRINT(
+        "ev=tp_fillGPUBuffer_exit pe=%d node=%d tp=%d nParts=%d\n",
+        CkMyPe(), CkMyNode(), thisIndex, nParts);
     delete msg;
     dm->transferLocalToGPU(nParts);
 }
@@ -3943,8 +4007,12 @@ void TreePiece::doAllBuckets(){
 ///        Used by local tree walk and Ewald GPU operations
 /// @param fromEwald Flags whether this function was called after an Ewald calculation
 void TreePiece::cudaFinishAllBuckets(int fromEwald){
-  ListCompute *listcompute = (ListCompute *) sGravity;
   DoubleWalkState *state = (DoubleWalkState *)sLocalGravityState;
+  TESTSTEP_LOCALWALK_PRINT(
+      "ev=tp_cudaFinishAllBuckets_enter pe=%d node=%d tp=%d iter=%d rung=%d fromEwald=%d numBuckets=%d pendingBefore=%d activeWalks=%d completedActiveWalks=%d\n",
+      CkMyPe(), CkMyNode(), thisIndex, iterationNo, activeRung, fromEwald, numBuckets,
+      state != NULL ? state->myNumParticlesPending : -1, (int)activeWalks.size(),
+      completedActiveWalks);
 
   for (int i = 0; i < numBuckets; ++i) {
     if (fromEwald) bucketReqs[i].finished = 1;
@@ -5010,12 +5078,19 @@ void TreePiece::startGravity(int am, // the active mask for multistepping
 			       double myTheta, // opening criterion
 			       const CkCallback& cb) {
   bUseCpu = bUseCpu_;
+#if defined(CUDA) && defined(TESTSTEP_GPU_PROGRESS_DIAG)
+  gpu_prog_try_snapshot_first_gravity_this_bigstep();
+#endif
 
   double starttime;
   LBTurnInstrumentOn();
   iterationNo++;
 
   cbGravity = cb;
+  TESTSTEP_LOCALWALK_PRINT(
+      "ev=tp_startGravity_setCb pe=%d node=%d tp=%d iter=%d rung=%d bUseCpu=%d cbGravityAddr=%p activeWalks=%d completedActiveWalks=%d\n",
+      CkMyPe(), CkMyNode(), thisIndex, iterationNo, am, bUseCpu_, (void *)&cbGravity,
+      (int)activeWalks.size(), completedActiveWalks);
   activeRung = am;
   theta = myTheta;
   thetaMono = theta*theta*theta*theta;
@@ -5381,6 +5456,10 @@ void TreePiece::commenceCalculateGravityLocal(){
   DoubleWalkState *lstate = (DoubleWalkState *)sLocalGravityState;
   lstate->placedRoots[0] = false;
 #endif
+  TESTSTEP_LOCALWALK_PRINT(
+      "ev=tp_commenceLocal_enter pe=%d node=%d tp=%d iter=%d rung=%d bUseCpu=%d activeWalks=%d completedActiveWalks=%d\n",
+      CkMyPe(), CkMyNode(), thisIndex, iterationNo, activeRung, bUseCpu,
+      (int)activeWalks.size(), completedActiveWalks);
   calculateGravityLocal();
 }
 
@@ -6392,6 +6471,10 @@ void TreePiece::markWalkDone() {
     // outstanding cache requests are satisfied.
 
     if (++completedActiveWalks == 2) {
+        TESTSTEP_LOCALWALK_PRINT(
+            "ev=tp_markWalkDone_terminal pe=%d node=%d tp=%d iter=%d rung=%d completedActiveWalks=%d activeWalks=%d cbGravityAddr=%p action=contribute_finishWalk\n",
+            CkMyPe(), CkMyNode(), thisIndex, iterationNo, activeRung, completedActiveWalks,
+            (int)activeWalks.size(), (void *)&cbGravity);
 	// At this point this treepiece has completed its walk.  However,
 	// there may be outstanding requests by other pieces.  We need to
 	// wait for all walks to complete before freeing data structures.
@@ -6406,6 +6489,10 @@ void TreePiece::markWalkDone() {
 
 void TreePiece::finishWalk()
 {
+  TESTSTEP_LOCALWALK_PRINT(
+      "ev=tp_finishWalk_enter pe=%d node=%d tp=%d iter=%d rung=%d cbGravityAddr=%p activeWalks=%d completedActiveWalks=%d\n",
+      CkMyPe(), CkMyNode(), thisIndex, iterationNo, activeRung, (void *)&cbGravity,
+      (int)activeWalks.size(), completedActiveWalks);
   if(verbosity > 1)
       CkPrintf("[%d] current load: %g current particles: %d\n", thisIndex,
 	       getObjTime(), myNumParticles);
@@ -6429,6 +6516,9 @@ void TreePiece::finishWalk()
   }
 #endif
 
+  TESTSTEP_LOCALWALK_PRINT(
+      "ev=tp_finishWalk_contribute pe=%d node=%d tp=%d iter=%d rung=%d cbGravityAddr=%p action=contribute_cbGravity\n",
+      CkMyPe(), CkMyNode(), thisIndex, iterationNo, activeRung, (void *)&cbGravity);
   gravityProxy[thisIndex].ckLocal()->contribute(cbGravity);
 }
 

@@ -21,6 +21,18 @@
 #include "MemoryPool.h" 
 
 #include "hapi.h"
+#if defined(TESTSTEP_GPU_PROGRESS_DIAG)
+#include "teststep_gpu_progress.h"
+#define GPU_PROG_NOTE_PEEK(path_)                                              \
+  do {                                                                         \
+    cudaError_t _gpu_peek_st = cudaPeekAtLastError();                          \
+    if (_gpu_peek_st != cudaSuccess)                                           \
+      gpu_prog_note_cuda_err(path_, (int)_gpu_peek_st);                        \
+    cudaChk(_gpu_peek_st);                                                     \
+  } while (0)
+#else
+#define GPU_PROG_NOTE_PEEK(path_) cudaChk(cudaPeekAtLastError())
+#endif
 #include "cuda_typedef.h"
 #include "cuda/intrinsics/voting.hu"
 #include "cuda/intrinsics/shfl.hu"
@@ -43,6 +55,9 @@ inline void cudaErrorDie(cudaError_t retCode, const char* code,
   if (retCode != cudaSuccess) {
     fprintf(stderr, "Fatal CUDA Error %s at %s:%d.\nReturn value %d from '%s'.",
         cudaGetErrorString(retCode), file, line, retCode, code);
+#if defined(TESTSTEP_GPU_PROGRESS_DIAG)
+    gpu_prog_snapshot_fatal_cuda((int)retCode, code, file, line);
+#endif
     abort();
   }
 }
@@ -109,6 +124,10 @@ void DataManagerTransferLocalTree(void *moments, size_t sMoments,
            );
 #endif
 
+#if defined(TESTSTEP_GPU_PROGRESS_DIAG)
+  gpu_prog_submit(GP_DM_LOCAL_XFER);
+#endif
+
   HAPI_TRACE_BEGIN();
 
   const char* funcTag = "DataManagerTransferLocalTree";
@@ -127,10 +146,13 @@ void DataManagerTransferLocalTree(void *moments, size_t sMoments,
       (VariablePartData *) *d_varParts,
       numParticles);
 #endif
-  cudaChk(cudaPeekAtLastError());
+  GPU_PROG_NOTE_PEEK(GP_DM_LOCAL_XFER);
 
   HAPI_TRACE_END(CUDA_XFER_LOCAL);
 
+#if defined(TESTSTEP_GPU_PROGRESS_DIAG)
+  gpu_prog_hapi_enqueue(GP_DM_LOCAL_XFER);
+#endif
   hapiAddCallback(stream, callback);
 }
 
@@ -156,6 +178,10 @@ void DataManagerTransferRemoteChunk(void *moments, size_t sMoments,
         );
 #endif
 
+#if defined(TESTSTEP_GPU_PROGRESS_DIAG)
+  gpu_prog_submit(GP_DM_REMOTE_XFER);
+#endif
+
   HAPI_TRACE_BEGIN();
 
   const char* funcTag = "DataManagerTransferRemoteChunk";
@@ -166,6 +192,10 @@ void DataManagerTransferRemoteChunk(void *moments, size_t sMoments,
 
   HAPI_TRACE_END(CUDA_XFER_REMOTE);
 
+  GPU_PROG_NOTE_PEEK(GP_DM_REMOTE_XFER);
+#if defined(TESTSTEP_GPU_PROGRESS_DIAG)
+  gpu_prog_hapi_enqueue(GP_DM_REMOTE_XFER);
+#endif
   hapiAddCallback(stream, callback);
 }
 
@@ -183,6 +213,10 @@ void DataManagerLocalTreeWalk(CudaRequest *data){
         CmiMyPe(),
         data->lastParticle - data->firstParticle
         );
+#endif
+
+#if defined(TESTSTEP_GPU_PROGRESS_DIAG)
+  gpu_prog_submit(GP_DM_LOCAL_TREE);
 #endif
 
   HAPI_TRACE_BEGIN();
@@ -205,9 +239,12 @@ void DataManagerLocalTreeWalk(CudaRequest *data){
     );
 #endif
 #endif
-  cudaChk(cudaPeekAtLastError());
+  GPU_PROG_NOTE_PEEK(GP_DM_LOCAL_TREE);
   HAPI_TRACE_END(CUDA_GRAV_TREE_LOCAL);
 
+#if defined(TESTSTEP_GPU_PROGRESS_DIAG)
+  gpu_prog_hapi_enqueue(GP_DM_LOCAL_TREE);
+#endif
   hapiAddCallback(stream, data->cb);
 }
 
@@ -222,6 +259,10 @@ void PEListNodeListDataTransferLocal(CudaRequest *data){
         CmiMyPe(),
         data->numInteractions
         );
+#endif
+
+#if defined(TESTSTEP_GPU_PROGRESS_DIAG)
+  gpu_prog_submit(GP_PELIST);
 #endif
 
   if (data->numInteractions > 0) {
@@ -245,10 +286,13 @@ void PEListNodeListDataTransferLocal(CudaRequest *data){
 #endif
 
     DataTransferBasicCleanup(&devPtr, stream, funcTag);
-    cudaChk(cudaPeekAtLastError());
+    GPU_PROG_NOTE_PEEK(GP_PELIST);
     HAPI_TRACE_END(CUDA_GRAV_NODELIST_LOCAL);
   }
 
+#if defined(TESTSTEP_GPU_PROGRESS_DIAG)
+  gpu_prog_hapi_enqueue(GP_PELIST);
+#endif
   hapiAddCallback(stream, data->cb);
 }
 
@@ -263,6 +307,10 @@ void PEListPartListDataTransferLocal(CudaRequest *data){
         CmiMyPe(),
         data->numInteractions
         );
+#endif
+
+#if defined(TESTSTEP_GPU_PROGRESS_DIAG)
+  gpu_prog_submit(GP_PELIST);
 #endif
 
   if (data->numInteractions > 0) {
@@ -284,10 +332,13 @@ void PEListPartListDataTransferLocal(CudaRequest *data){
       );
 #endif
     DataTransferBasicCleanup(&devPtr, stream, funcTag);
-    cudaChk(cudaPeekAtLastError());
+    GPU_PROG_NOTE_PEEK(GP_PELIST);
     HAPI_TRACE_END(CUDA_GRAV_PARTLIST_LOCAL);
   }
 
+#if defined(TESTSTEP_GPU_PROGRESS_DIAG)
+  gpu_prog_hapi_enqueue(GP_PELIST);
+#endif
   hapiAddCallback(stream, data->cb);
 }
 
@@ -302,6 +353,10 @@ void PEListNodeListDataTransferRemote(CudaRequest *data){
         CmiMyPe(),
         data->numInteractions
         );
+#endif
+
+#if defined(TESTSTEP_GPU_PROGRESS_DIAG)
+  gpu_prog_submit(GP_PELIST);
 #endif
 
   if (data->numInteractions > 0) {
@@ -324,10 +379,13 @@ void PEListNodeListDataTransferRemote(CudaRequest *data){
       );
 #endif
     DataTransferBasicCleanup(&devPtr, stream, funcTag);
-    cudaChk(cudaPeekAtLastError());
+    GPU_PROG_NOTE_PEEK(GP_PELIST);
     HAPI_TRACE_END(CUDA_GRAV_NODELIST_REMOTE);
   }
 
+#if defined(TESTSTEP_GPU_PROGRESS_DIAG)
+  gpu_prog_hapi_enqueue(GP_PELIST);
+#endif
   hapiAddCallback(stream, data->cb);
 }
 
@@ -342,6 +400,10 @@ void PEListNodeListDataTransferRemoteResume(CudaRequest *data){
         CmiMyPe(),
         data->numInteractions
         );
+#endif
+
+#if defined(TESTSTEP_GPU_PROGRESS_DIAG)
+  gpu_prog_submit(GP_PELIST);
 #endif
 
   if (data->numInteractions > 0) {
@@ -372,10 +434,13 @@ void PEListNodeListDataTransferRemoteResume(CudaRequest *data){
     if (d_missedNodes != nullptr) {
       cudaChk(gpuPoolFree(d_missedNodes, stream, funcTag));
     }
-    cudaChk(cudaPeekAtLastError());
+    GPU_PROG_NOTE_PEEK(GP_PELIST);
     HAPI_TRACE_END(CUDA_GRAV_NODELIST_REMOTE_RESUME);
   }
 
+#if defined(TESTSTEP_GPU_PROGRESS_DIAG)
+  gpu_prog_hapi_enqueue(GP_PELIST);
+#endif
   hapiAddCallback(stream, data->cb);
 }
 
@@ -390,6 +455,10 @@ void PEListPartListDataTransferRemote(CudaRequest *data){
         CmiMyPe(),
         data->numInteractions
         );
+#endif
+
+#if defined(TESTSTEP_GPU_PROGRESS_DIAG)
+  gpu_prog_submit(GP_PELIST);
 #endif
 
   CudaDevPtr devPtr;
@@ -424,10 +493,13 @@ void PEListPartListDataTransferRemote(CudaRequest *data){
       );
 #endif
     DataTransferBasicCleanup(&devPtr, stream, funcTag);
-    cudaChk(cudaPeekAtLastError());
+    GPU_PROG_NOTE_PEEK(GP_PELIST);
     HAPI_TRACE_END(CUDA_GRAV_PARTLIST_REMOTE);
   }
 
+#if defined(TESTSTEP_GPU_PROGRESS_DIAG)
+  gpu_prog_hapi_enqueue(GP_PELIST);
+#endif
   hapiAddCallback(stream, data->cb);
 }
 
@@ -442,6 +514,10 @@ void PEListPartListDataTransferRemoteResume(CudaRequest *data){
         CmiMyPe(),
         data->numInteractions
         );
+#endif
+
+#if defined(TESTSTEP_GPU_PROGRESS_DIAG)
+  gpu_prog_submit(GP_PELIST);
 #endif
 
   if (data->numInteractions > 0) {
@@ -470,10 +546,13 @@ void PEListPartListDataTransferRemoteResume(CudaRequest *data){
     if (d_missedParts != nullptr) {
       cudaChk(gpuPoolFree(d_missedParts, stream, funcTag));
     }
-    cudaChk(cudaPeekAtLastError());
+    GPU_PROG_NOTE_PEEK(GP_PELIST);
     HAPI_TRACE_END(CUDA_GRAV_PARTLIST_REMOTE_RESUME);
   }
 
+#if defined(TESTSTEP_GPU_PROGRESS_DIAG)
+  gpu_prog_hapi_enqueue(GP_PELIST);
+#endif
   hapiAddCallback(stream, data->cb);
 }
 
@@ -550,9 +629,16 @@ void DataTransferBasicCleanup(CudaDevPtr *ptr, cudaStream_t stream, const char* 
  */
 void TransferParticleVarsBack(VariablePartData *hostBuffer, size_t size, void *d_varParts,
                               cudaStream_t stream, void *cb){
+#if defined(TESTSTEP_GPU_PROGRESS_DIAG)
+  gpu_prog_submit(GP_PARTVAR_BACK);
+#endif
   HAPI_TRACE_BEGIN();
   cudaChk(cudaMemcpyAsync(hostBuffer, d_varParts, size, cudaMemcpyDeviceToHost, stream));
   HAPI_TRACE_END(CUDA_XFER_BACK);
+  GPU_PROG_NOTE_PEEK(GP_PARTVAR_BACK);
+#if defined(TESTSTEP_GPU_PROGRESS_DIAG)
+  gpu_prog_hapi_enqueue(GP_PARTVAR_BACK);
+#endif
   hapiAddCallback(stream, cb);
 }
 
@@ -1362,6 +1448,10 @@ void DataManagerEwald(void *d_localParts, void *d_localVars, void *_ewt, void *_
         );
 #endif
 
+#if defined(TESTSTEP_GPU_PROGRESS_DIAG)
+  gpu_prog_submit(GP_EWALD);
+#endif
+
   HAPI_TRACE_BEGIN();
 
   cudaMemcpyToSymbolAsync(ewt, _ewt, ((EwaldReadOnlyData *)_cachedData)->nEwhLoop * sizeof(EwtData), 0, cudaMemcpyHostToDevice, stream);
@@ -1374,7 +1464,10 @@ void DataManagerEwald(void *d_localParts, void *d_localVars, void *_ewt, void *_
 #endif
   HAPI_TRACE_END(CUDA_EWALD);
 
-  cudaChk(cudaPeekAtLastError());
+  GPU_PROG_NOTE_PEEK(GP_EWALD);
+#if defined(TESTSTEP_GPU_PROGRESS_DIAG)
+  gpu_prog_hapi_enqueue(GP_EWALD);
+#endif
   hapiAddCallback(stream, cb);
 }
 
